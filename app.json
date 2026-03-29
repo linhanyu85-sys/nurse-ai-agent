@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "护理AI助手",
+    "name": "AI Nursing Assistant",
     "slug": "ai-nursing-mobile",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -21,7 +21,6 @@
     "android": {
       "package": "com.linhanyu.ainursing",
       "versionCode": 1,
-      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#f4f6f8"
@@ -39,10 +38,18 @@
       [
         "expo-av",
         {
-          "microphonePermission": "允许访问麦克风，用于语音录入。"
+          "microphonePermission": "Allow microphone access for voice input."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {
