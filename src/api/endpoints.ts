@@ -17,6 +17,7 @@ import type {
   CollaborationThreadDetail,
   CollaborationThreadHistoryItem,
   ConversationHistoryItem,
+  DepartmentOption,
   DirectSession,
   DirectSessionDetail,
   DocumentDraft,
@@ -27,6 +28,7 @@ import type {
   Patient,
   PatientContext,
   RecommendationResult,
+  UserInfo,
 } from "../types";
 
 function extractDetail(detail: unknown): string {
@@ -413,11 +415,23 @@ const mapThreadHistory = (items: any[]): CollaborationThreadHistoryItem[] =>
 
 const mapAccount = (item: any): CollabAccount => ({
   id: String(item?.id || ""),
-  account: String(item?.account || ""),
+  username: item?.username ? String(item.username) : undefined,
+  account: String(item?.account || item?.username || ""),
   full_name: String(item?.full_name || ""),
   role_code: String(item?.role_code || ""),
+  phone: item?.phone ? String(item.phone) : undefined,
+  email: item?.email ? String(item.email) : undefined,
   department: item?.department ? String(item.department) : undefined,
   title: item?.title ? String(item.title) : undefined,
+  status: item?.status ? String(item.status) : undefined,
+});
+
+const mapDepartment = (item: any): DepartmentOption => ({
+  id: String(item?.id || ""),
+  code: item?.code ? String(item.code) : undefined,
+  name: String(item?.name || ""),
+  ward_type: item?.ward_type ? String(item.ward_type) : undefined,
+  location: item?.location ? String(item.location) : undefined,
 });
 
 const mapDirectSession = (item: any): DirectSession => ({
@@ -532,7 +546,9 @@ const mapOrderList = (data: any): OrderListOut => ({
   orders: Array.isArray(data?.orders) ? data.orders.map(mapOrder) : [],
 });
 
-const WARD_FALLBACK_IDS = ["dep-card-01", "dep-icu-01", "dep-ward-01"] as const;
+const PRIMARY_DEPARTMENT_CODE = "dep-card-01";
+const PRIMARY_DEPARTMENT_ID = "11111111-1111-1111-1111-111111111001";
+const WARD_FALLBACK_IDS = [PRIMARY_DEPARTMENT_CODE, PRIMARY_DEPARTMENT_ID] as const;
 
 function uniqKeepOrder(items: string[]): string[] {
   const hit = new Set<string>();
@@ -548,6 +564,136 @@ function uniqKeepOrder(items: string[]): string[] {
   return output;
 }
 
+function normalizeMatchText(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[-_.·/]/g, "");
+}
+
+function uniqueDepartments(items: DepartmentOption[]): DepartmentOption[] {
+  const seen = new Set<string>();
+  const output: DepartmentOption[] = [];
+  items.forEach((item) => {
+    const key = String(item?.id || "").trim();
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    output.push(item);
+  });
+  return output;
+}
+
+function departmentPriority(item: DepartmentOption): number {
+  let score = 0;
+  if (item.id === PRIMARY_DEPARTMENT_ID) {
+    score += 10;
+  }
+  if (item.code === PRIMARY_DEPARTMENT_CODE) {
+    score += 9;
+  }
+  if (String(item.name || "").includes("护理单元")) {
+    score += 3;
+  }
+  if (String(item.name || "").includes("心内")) {
+    score += 2;
+  }
+  return score;
+}
+
+function mergeUserInfo(baseUser: UserInfo, liveAccount?: CollabAccount | null): UserInfo {
+  if (!liveAccount) {
+    return {
+      ...baseUser,
+      username: baseUser.username || baseUser.account,
+      account: baseUser.account || baseUser.username,
+    };
+  }
+
+  return {
+    ...baseUser,
+    username: liveAccount.username || baseUser.username || liveAccount.account || baseUser.account,
+    account: liveAccount.account || liveAccount.username || baseUser.account || baseUser.username,
+    full_name: liveAccount.full_name || baseUser.full_name,
+    role_code: liveAccount.role_code || baseUser.role_code,
+    phone: liveAccount.phone ?? baseUser.phone,
+    email: liveAccount.email ?? baseUser.email,
+    department: liveAccount.department ?? baseUser.department,
+    title: liveAccount.title ?? baseUser.title,
+    status: liveAccount.status || baseUser.status,
+  };
+}
+
+async function fetchWardBedCount(departmentId: string): Promise<number> {
+  const { data } = await httpClient.get(`/api/wards/${encodeURIComponent(departmentId)}/beds`);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+async function resolvePreferredDepartmentId(
+  departments: DepartmentOption[],
+  departmentHint?: string | null,
+): Promise<string> {
+  const normalizedHint = normalizeMatchText(departmentHint);
+  const exactMatches = departments.filter((item) => {
+    const id = normalizeMatchText(item.id);
+    const code = normalizeMatchText(item.code);
+    const name = normalizeMatchText(item.name);
+    return Boolean(normalizedHint) && (normalizedHint === id || normalizedHint === code || normalizedHint === name);
+  });
+
+  const fuzzyMatches = departments.filter((item) => {
+    const code = normalizeMatchText(item.code);
+    const name = normalizeMatchText(item.name);
+    const location = normalizeMatchText(item.location);
+    return (
+      Boolean(normalizedHint) &&
+      [code, name, location].some((value) => value && (value.includes(normalizedHint) || normalizedHint.includes(value)))
+    );
+  });
+
+  const primary = departments.find(
+    (item) => item.id === PRIMARY_DEPARTMENT_ID || item.code === PRIMARY_DEPARTMENT_CODE,
+  );
+  const candidates = uniqueDepartments([
+    ...exactMatches,
+    ...fuzzyMatches,
+    ...(primary ? [primary] : []),
+    ...departments.slice(0, 1),
+  ]);
+
+  if (!candidates.length) {
+    return PRIMARY_DEPARTMENT_CODE;
+  }
+  if (candidates.length === 1) {
+    return candidates[0].id;
+  }
+
+  try {
+    const withCounts = await Promise.all(
+      candidates.slice(0, 4).map(async (item) => {
+        try {
+          return { item, count: await fetchWardBedCount(item.id) };
+        } catch {
+          return { item, count: -1 };
+        }
+      }),
+    );
+
+    withCounts.sort((a, b) => {
+      if (b.count !== a.count) {
+        return b.count - a.count;
+      }
+      return departmentPriority(b.item) - departmentPriority(a.item);
+    });
+
+    return withCounts[0]?.item.id || candidates[0].id;
+  } catch {
+    return candidates.sort((a, b) => departmentPriority(b) - departmentPriority(a))[0].id;
+  }
+}
+
 export const api = {
   async login(username: string, password: string) {
     if (isMockMode) {
@@ -555,6 +701,77 @@ export const api = {
     }
     const { data } = await httpClient.post("/api/auth/login", { username, password });
     return data;
+  },
+
+  async getDepartments(): Promise<DepartmentOption[]> {
+    if (isMockMode) {
+      return [
+        {
+          id: PRIMARY_DEPARTMENT_ID,
+          code: PRIMARY_DEPARTMENT_CODE,
+          name: "心内护理单元A",
+          ward_type: "inpatient",
+          location: "住院楼6层",
+        },
+      ];
+    }
+    const { data } = await httpClient.get("/api/admin/departments");
+    return Array.isArray(data) ? data.map(mapDepartment) : [];
+  },
+
+  async getAdminAccounts(query = "", statusFilter?: string): Promise<CollabAccount[]> {
+    if (isMockMode) {
+      if ((mockApi as any).searchCollabAccounts) {
+        return (mockApi as any).searchCollabAccounts(query);
+      }
+      return [];
+    }
+    const { data } = await httpClient.get("/api/admin/accounts", {
+      params: {
+        query,
+        status_filter: statusFilter || "",
+      },
+    });
+    return Array.isArray(data) ? data.map(mapAccount) : [];
+  },
+
+  async bootstrapSession(user: UserInfo): Promise<{ user: UserInfo; departmentId: string }> {
+    if (isMockMode) {
+      return {
+        user: {
+          ...user,
+          username: user.username || user.account,
+          account: user.account || user.username,
+        },
+        departmentId: PRIMARY_DEPARTMENT_CODE,
+      };
+    }
+
+    let nextUser: UserInfo = {
+      ...user,
+      username: user.username || user.account,
+      account: user.account || user.username,
+    };
+
+    try {
+      const query = String(nextUser.username || nextUser.account || nextUser.id || "").trim();
+      if (query) {
+        const accounts = await api.getAdminAccounts(query);
+        const liveAccount =
+          accounts.find((item) => item.username === query || item.account === query || item.id === query) || null;
+        nextUser = mergeUserInfo(nextUser, liveAccount);
+      }
+    } catch {
+      // keep auth-service payload when account enrichment fails
+    }
+
+    try {
+      const departments = await api.getDepartments();
+      const departmentId = await resolvePreferredDepartmentId(departments, nextUser.department);
+      return { user: nextUser, departmentId: departmentId || PRIMARY_DEPARTMENT_CODE };
+    } catch {
+      return { user: nextUser, departmentId: PRIMARY_DEPARTMENT_CODE };
+    }
   },
 
   async register(payload: {
@@ -575,8 +792,8 @@ export const api = {
     if (isMockMode) {
       return mockApi.getWardBeds();
     }
-    const requested = String(departmentId || "").trim() || "dep-card-01";
-    const candidateIds = uniqKeepOrder([requested, "dep-card-01", ...WARD_FALLBACK_IDS]);
+    const requested = String(departmentId || "").trim() || PRIMARY_DEPARTMENT_CODE;
+    const candidateIds = uniqKeepOrder([requested, ...WARD_FALLBACK_IDS]);
     let lastError: unknown = null;
 
     for (const depId of candidateIds) {
@@ -590,15 +807,6 @@ export const api = {
       }
     }
 
-    try {
-      const fallback = await mockApi.getWardBeds();
-      if (Array.isArray(fallback) && fallback.length > 0) {
-        return fallback;
-      }
-    } catch {
-      // ignore
-    }
-
     if (lastError) {
       throw lastError;
     }
@@ -609,24 +817,16 @@ export const api = {
     if (isMockMode) {
       return mockApi.getPatient(patientId);
     }
-    try {
-      const { data } = await httpClient.get(`/api/patients/${patientId}`);
-      return data;
-    } catch {
-      return mockApi.getPatient(patientId);
-    }
+    const { data } = await httpClient.get(`/api/patients/${patientId}`);
+    return data;
   },
 
   async getPatientContext(patientId: string): Promise<PatientContext> {
     if (isMockMode) {
       return mockApi.getPatientContext(patientId);
     }
-    try {
-      const { data } = await httpClient.get(`/api/patients/${patientId}/context`);
-      return data;
-    } catch {
-      return mockApi.getPatientContext(patientId);
-    }
+    const { data } = await httpClient.get(`/api/patients/${patientId}/context`);
+    return data;
   },
 
   async getPatientCase(patientId: string): Promise<PatientCaseBundle> {
@@ -670,26 +870,18 @@ export const api = {
     if (isMockMode) {
       return mockApi.getPatientOrders(patientId);
     }
-    try {
-      const { data } = await httpClient.get(`/api/orders/patients/${patientId}`);
-      return mapOrderList(data);
-    } catch {
-      return mockApi.getPatientOrders(patientId);
-    }
+    const { data } = await httpClient.get(`/api/orders/patients/${patientId}`);
+    return mapOrderList(data);
   },
 
   async getPatientOrderHistory(patientId: string, limit = 80): Promise<ClinicalOrder[]> {
     if (isMockMode) {
       return mockApi.getPatientOrderHistory(patientId, limit);
     }
-    try {
-      const { data } = await httpClient.get(`/api/orders/patients/${patientId}/history`, {
-        params: { limit },
-      });
-      return Array.isArray(data) ? data.map(mapOrder) : [];
-    } catch {
-      return mockApi.getPatientOrderHistory(patientId, limit);
-    }
+    const { data } = await httpClient.get(`/api/orders/patients/${patientId}/history`, {
+      params: { limit },
+    });
+    return Array.isArray(data) ? data.map(mapOrder) : [];
   },
 
   async doubleCheckOrder(orderId: string, checkedBy: string, note?: string): Promise<ClinicalOrder> {

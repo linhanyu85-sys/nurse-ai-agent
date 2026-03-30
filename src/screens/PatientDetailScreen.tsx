@@ -2,7 +2,7 @@
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-import { api } from "../api/endpoints";
+import { api, getApiErrorMessage } from "../api/endpoints";
 import { subscribePatientContext } from "../api/realtime";
 import { AnimatedBlock, ScreenShell, StatusPill, SurfaceCard } from "../components/ui";
 import type { RootStackParamList } from "../navigation/RootNavigator";
@@ -16,6 +16,7 @@ export function PatientDetailScreen({ route }: Props) {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [context, setContext] = useState<PatientContext | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [streamStatus, setStreamStatus] = useState("未连接");
   const [lastPushAt, setLastPushAt] = useState<string>("-");
   const [orderList, setOrderList] = useState<OrderListOut | null>(null);
@@ -23,6 +24,7 @@ export function PatientDetailScreen({ route }: Props) {
   useEffect(() => {
     const run = async () => {
       setLoading(true);
+      setError("");
       try {
         const [patientData, contextData, orderData] = await Promise.all([
           api.getPatient(patientId),
@@ -32,6 +34,11 @@ export function PatientDetailScreen({ route }: Props) {
         setPatient(patientData);
         setContext(contextData);
         setOrderList(orderData);
+      } catch (loadError) {
+        setPatient(null);
+        setContext(null);
+        setOrderList(null);
+        setError(getApiErrorMessage(loadError, "患者详情加载失败，请检查后端连接。"));
       } finally {
         setLoading(false);
       }
@@ -71,6 +78,14 @@ export function PatientDetailScreen({ route }: Props) {
       subtitle={`${patient?.gender || "-"} · ${patient?.age || "-"}岁 · 血型 ${patient?.blood_type || "-"}`}
       rightNode={<StatusPill text={streamStatus} tone={streamStatus === "连接异常" ? "danger" : "info"} />}
     >
+      {error ? (
+        <AnimatedBlock delay={20}>
+          <SurfaceCard>
+            <Text style={styles.error}>{error}</Text>
+          </SurfaceCard>
+        </AnimatedBlock>
+      ) : null}
+
       <AnimatedBlock delay={40}>
         <SurfaceCard>
           <Text style={styles.info}>病案号：{patient?.mrn}</Text>
@@ -168,4 +183,5 @@ const styles = StyleSheet.create({
   info: { color: colors.subText, fontSize: 14 },
   item: { color: colors.text, lineHeight: 22 },
   docSync: { color: colors.primary, fontSize: 13, fontWeight: "600" },
+  error: { color: colors.danger, lineHeight: 20, fontWeight: "600" },
 });

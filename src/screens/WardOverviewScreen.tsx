@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
-import { api } from "../api/endpoints";
+import { api, getApiErrorMessage } from "../api/endpoints";
 import { subscribeWardBeds } from "../api/realtime";
 import { ActionButton, AnimatedBlock, ScreenShell, StatusPill, SurfaceCard } from "../components/ui";
 import type { RootStackParamList } from "../navigation/RootNavigator";
@@ -18,6 +18,7 @@ export function WardOverviewScreen() {
   const [loading, setLoading] = useState(true);
   const [beds, setBeds] = useState<BedOverview[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [streamStatus, setStreamStatus] = useState("未连接");
   const [lastPushAt, setLastPushAt] = useState("-");
 
@@ -43,9 +44,14 @@ export function WardOverviewScreen() {
 
   const loadBeds = async () => {
     setLoading(true);
+    setLoadError("");
     try {
       const data = await api.getWardBeds(departmentId);
       setBeds(data);
+    } catch (error) {
+      setBeds([]);
+      setStreamStatus("连接异常");
+      setLoadError(getApiErrorMessage(error, "病区数据加载失败，请检查后台网关。"));
     } finally {
       setLoading(false);
     }
@@ -123,9 +129,13 @@ export function WardOverviewScreen() {
                 if (!bed.current_patient_id) {
                   return;
                 }
-                const patient = await api.getPatient(bed.current_patient_id);
-                setSelectedPatient(patient);
-                navigation.navigate("PatientDetail", { patientId: bed.current_patient_id });
+                try {
+                  const patient = await api.getPatient(bed.current_patient_id);
+                  setSelectedPatient(patient);
+                  navigation.navigate("PatientDetail", { patientId: bed.current_patient_id });
+                } catch (error) {
+                  Alert.alert("病例加载失败", getApiErrorMessage(error, "患者详情暂时不可用，请稍后再试。"));
+                }
               }}
             >
               <SurfaceCard>
@@ -142,6 +152,14 @@ export function WardOverviewScreen() {
           </AnimatedBlock>
         ))
       )}
+
+      {!loading && loadError ? (
+        <AnimatedBlock delay={110}>
+          <SurfaceCard>
+            <Text style={styles.errorText}>{loadError}</Text>
+          </SurfaceCard>
+        </AnimatedBlock>
+      ) : null}
     </ScreenShell>
   );
 }
@@ -177,6 +195,11 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: colors.subText,
+  },
+  errorText: {
+    color: colors.danger,
+    lineHeight: 20,
+    fontWeight: "600",
   },
   pressableReset: {
     borderRadius: 16,

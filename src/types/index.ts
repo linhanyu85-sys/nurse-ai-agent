@@ -1,7 +1,22 @@
 export type UserInfo = {
   id: string;
+  username?: string;
   full_name: string;
   role_code: string;
+  account?: string;
+  phone?: string | null;
+  email?: string | null;
+  department?: string | null;
+  title?: string | null;
+  status?: string;
+};
+
+export type DepartmentOption = {
+  id: string;
+  code?: string;
+  name: string;
+  ward_type?: string;
+  location?: string;
 };
 
 export type BedOverview = {
@@ -250,11 +265,15 @@ export type CollaborationThreadHistoryItem = {
 
 export type CollabAccount = {
   id: string;
+  username?: string;
   account: string;
   full_name: string;
   role_code: string;
+  phone?: string | null;
+  email?: string | null;
   department?: string | null;
   title?: string | null;
+  status?: string;
 };
 
 export type CollabContactList = {

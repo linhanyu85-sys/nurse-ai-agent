@@ -52,12 +52,13 @@ export function LoginScreen({ navigation }: Props) {
     setError(null);
     try {
       const data = await api.login(username.trim(), password);
+      const session = await api.bootstrapSession(data.user);
       if (rememberPassword) {
         await saveRememberedLogin(username, password);
       } else {
         await clearRememberedLogin();
       }
-      setAuth(data.access_token, data.user);
+      setAuth(data.access_token, session.user, session.departmentId);
     } catch (err) {
       setError(getApiErrorMessage(err, "登录失败，请稍后重试。"));
     } finally {

@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { api } from "../api/endpoints";
+import { api, getApiErrorMessage } from "../api/endpoints";
 import { ActionButton, StatusPill, SurfaceCard } from "./ui";
 import { colors } from "../theme";
 import type { BedOverview, Patient } from "../types";
@@ -90,8 +90,11 @@ export function PatientCaseSelector({
     }
     setSelectingPatientId(patientId);
     try {
+      setLoadError("");
       const patient = await api.getPatient(patientId);
       onSelectPatient(patient);
+    } catch (error) {
+      setLoadError(getApiErrorMessage(error, "病例详情加载失败，请检查后端连接。"));
     } finally {
       setSelectingPatientId("");
     }

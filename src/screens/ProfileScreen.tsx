@@ -26,7 +26,11 @@ export function ProfileScreen() {
       <AnimatedBlock delay={40}>
         <SurfaceCard>
           <Text style={styles.item}>姓名：{user?.full_name || "-"}</Text>
+          <Text style={styles.item}>账号：{user?.username || user?.account || "-"}</Text>
           <Text style={styles.item}>角色：{user?.role_code || "-"}</Text>
+          <Text style={styles.item}>科室：{user?.department || "-"}</Text>
+          <Text style={styles.item}>职务：{user?.title || "-"}</Text>
+          <Text style={styles.item}>状态：{user?.status || "-"}</Text>
           <Text style={styles.item}>用户ID：{user?.id || "-"}</Text>
           <Text style={styles.item}>接口地址：{apiBaseURL}</Text>
           <Text style={styles.item}>模拟模式：{String(isMockMode)}</Text>

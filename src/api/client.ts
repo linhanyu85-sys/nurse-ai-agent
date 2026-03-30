@@ -1,5 +1,6 @@
 import axios from "axios";
 import { Platform } from "react-native";
+
 import { decodeEscapedText } from "../utils/text";
 
 function trimSlash(s: string): string {
@@ -39,7 +40,9 @@ function resolveBase(raw: string): string {
   }
 }
 
-const cfgUrl = process.env.EXPO_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+const cfgUrl =
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  (typeof __DEV__ !== "undefined" && __DEV__ ? "http://127.0.0.1:8000" : "http://47.84.99.189:18000");
 export const apiBaseURL = resolveBase(cfgUrl);
 
 function setPort(raw: string, p: string): string {
@@ -90,7 +93,7 @@ httpClient.interceptors.response.use((rsp) => {
   return rsp;
 });
 
-const mockEnv = process.env.EXPO_PUBLIC_API_MOCK || "true";
+const mockEnv = process.env.EXPO_PUBLIC_API_MOCK || "false";
 export const isMockMode = mockEnv === "true";
 
 export function getWsBaseUrl() {
