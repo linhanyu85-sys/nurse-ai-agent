@@ -100,8 +100,8 @@ export function PatientCaseSelector({
   const content = (
     <>
       <View style={styles.header}>
-        <Text style={styles.title}>病例列表（先选病例，再进入 AI Agent）</Text>
-        <ActionButton label="刷新病例" onPress={loadCases} variant="secondary" />
+        <Text style={styles.title}>{embedded ? "选择病例" : "病例列表（先选病例，再进入 AI Agent）"}</Text>
+        <ActionButton label={embedded ? "刷新" : "刷新病例"} onPress={loadCases} variant="secondary" />
       </View>
 
       {selectedPatient ? (
@@ -112,7 +112,7 @@ export function PatientCaseSelector({
           </Text>
         </View>
       ) : (
-        <Text style={styles.emptyTip}>尚未选择病例，请先点击下方患者卡片。</Text>
+        <Text style={styles.emptyTip}>{embedded ? "先从下方选择一个病例。" : "尚未选择病例，请先点击下方患者卡片。"}</Text>
       )}
 
       <View style={styles.searchWrap}>
@@ -147,6 +147,8 @@ export function PatientCaseSelector({
         const active = selectedPatient?.id === patientId;
         const selecting = selectingPatientId === patientId;
         const expanded = expandedPatientIds.includes(patientId);
+        const riskText = item.risk_tags.join(" / ") || "-";
+        const taskText = item.pending_tasks.join(" / ") || "-";
         return (
           <Pressable
             key={item.id}
@@ -158,16 +160,23 @@ export function PatientCaseSelector({
                 {item.bed_no}床 · {item.patient_name || patientId}
               </Text>
               <View style={styles.caseActions}>
-                <Pressable onPress={() => toggleExpand(patientId)} hitSlop={8}>
-                  <Text style={styles.caseToggle}>{expanded ? "收起" : "展开"}</Text>
-                </Pressable>
-                <Text style={styles.caseStatus}>{active ? "已选中" : selecting ? "切换中..." : "点击切换"}</Text>
+                {!embedded ? (
+                  <Pressable onPress={() => toggleExpand(patientId)} hitSlop={8}>
+                    <Text style={styles.caseToggle}>{expanded ? "收起" : "展开"}</Text>
+                  </Pressable>
+                ) : null}
+                <Text style={styles.caseStatus}>{active ? "已选中" : selecting ? "切换中..." : embedded ? "选择" : "点击切换"}</Text>
               </View>
             </View>
-            {expanded ? (
+            {embedded ? (
+              <Text style={styles.caseMeta}>
+                风险 {item.risk_tags.length} 项 · 待处理 {item.pending_tasks.length} 项
+                {item.latest_document_sync ? ` · 文书 ${item.latest_document_sync}` : ""}
+              </Text>
+            ) : expanded ? (
               <>
-                <Text style={styles.caseMeta}>风险：{item.risk_tags.join(" / ") || "-"}</Text>
-                <Text style={styles.caseMeta}>待处理：{item.pending_tasks.join(" / ") || "-"}</Text>
+                <Text style={styles.caseMeta}>风险：{riskText}</Text>
+                <Text style={styles.caseMeta}>待处理：{taskText}</Text>
                 {item.latest_document_sync ? <Text style={styles.caseMeta}>文书：{item.latest_document_sync}</Text> : null}
               </>
             ) : (

@@ -13,12 +13,20 @@ type Props = {
   onSubmit: () => void;
   placeholder?: string;
   embedded?: boolean;
+  submitLabel?: string;
+  disabled?: boolean;
+  hideTip?: boolean;
 };
 
 function isInvalidTranscription(text: string, provider: string): boolean {
   if (!text) {
     return true;
   }
+
+  if (provider === "fallback") {
+    return true;
+  }
+
   const blockedPhrases = [
     "语音转写失败",
     "手动输入",
@@ -26,9 +34,7 @@ function isInvalidTranscription(text: string, provider: string): boolean {
     "请补充床号",
     "未识别到有效语音",
   ];
-  if (provider === "fallback") {
-    return true;
-  }
+
   return blockedPhrases.some((item) => text.includes(item));
 }
 
@@ -52,7 +58,16 @@ const uriToBase64 = async (uri: string) => {
   }
 };
 
-export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, embedded = false }: Props) {
+export function VoiceTextInput({
+  value,
+  onChangeText,
+  onSubmit,
+  placeholder,
+  embedded = false,
+  submitLabel = "发送",
+  disabled = false,
+  hideTip = false,
+}: Props) {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [busy, setBusy] = useState(false);
   const [recordingOn, setRecordingOn] = useState(false);
@@ -76,6 +91,10 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, emb
   }, [recordingOn]);
 
   const startRecording = async () => {
+    if (disabled) {
+      return;
+    }
+
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (!permission.granted) {
@@ -97,14 +116,14 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, emb
       setRecording(nextRecording);
       setRecordingOn(true);
       setRecordSeconds(0);
-      setVoiceStatus("录音已开始，请说话。");
+      setVoiceStatus("录音已开始，请直接说出问题。");
     } catch {
       Alert.alert("录音启动失败");
     }
   };
 
   const stopRecordingAndTranscribe = async () => {
-    if (!recording) {
+    if (!recording || disabled) {
       return;
     }
 
@@ -115,13 +134,9 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, emb
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
       });
+
       const uri = recording.getURI();
-
-      let audioBase64: string | undefined;
-      if (uri) {
-        audioBase64 = await uriToBase64(uri);
-      }
-
+      const audioBase64 = uri ? await uriToBase64(uri) : undefined;
       const result = await api.transcribe({
         audioBase64,
         textHint: value || undefined,
@@ -130,16 +145,16 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, emb
       const provider = String(result?.provider || "asr");
       const nextText = String(result?.text || "").trim();
       if (isInvalidTranscription(nextText, provider)) {
-        setVoiceStatus("当前未返回有效语音文本，请重试或继续手动输入。");
+        setVoiceStatus("这次没有拿到有效语音文本，你可以重试，或直接手动输入。");
         Alert.alert("语音识别未成功", "请靠近麦克风重试，或继续手动输入。");
         return;
       }
 
       onChangeText(value ? `${value} ${nextText}` : nextText);
-      setVoiceStatus(`转写完成：${provider}`);
+      setVoiceStatus(`转写完成 · ${provider}`);
     } catch {
       setVoiceStatus("语音转写失败，请重试或手动输入。");
-      Alert.alert("语音转写失败", "可继续手动输入。");
+      Alert.alert("语音转写失败", "可以继续手动输入。");
     } finally {
       setRecording(null);
       setRecordingOn(false);
@@ -153,20 +168,27 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, emb
       <TextInput
         style={styles.input}
         multiline
-        placeholder={placeholder || "请输入"}
+        placeholder={placeholder || "请输入问题"}
         placeholderTextColor={colors.subText}
         value={value}
         onChangeText={onChangeText}
+        editable={!disabled}
       />
-      <Text style={styles.tipLine}>支持语音和打字混合输入，系统会自动合并。</Text>
+      {!hideTip ? <Text style={styles.tipLine}>支持语音、手动输入和混合输入，系统会自动合并内容。</Text> : null}
       <View style={styles.row}>
         <ActionButton
-          label={recordingOn ? "停止录音并转写" : "语音录入"}
+          label={recordingOn ? "结束录音" : "语音录入"}
           onPress={recordingOn ? stopRecordingAndTranscribe : startRecording}
           variant={recordingOn ? "danger" : "secondary"}
           style={styles.actionBtn}
+          disabled={disabled || busy}
         />
-        <ActionButton label="发送" onPress={onSubmit} style={styles.actionBtn} />
+        <ActionButton
+          label={submitLabel}
+          onPress={onSubmit}
+          style={styles.actionBtn}
+          disabled={disabled || busy}
+        />
       </View>
       {busy ? (
         <View style={styles.busyRow}>
@@ -183,11 +205,7 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, emb
     return <View style={styles.embeddedShell}>{content}</View>;
   }
 
-  return (
-    <SurfaceCard style={styles.box}>
-      {content}
-    </SurfaceCard>
-  );
+  return <SurfaceCard style={styles.box}>{content}</SurfaceCard>;
 }
 
 const styles = StyleSheet.create({
@@ -210,12 +228,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  tipLine: { color: colors.subText, fontSize: 12.5 },
+  tipLine: {
+    color: colors.subText,
+    fontSize: 12.5,
+  },
   row: {
     flexDirection: "row",
     gap: 10,
   },
-  actionBtn: { flex: 1 },
+  actionBtn: {
+    flex: 1,
+  },
   busyRow: {
     flexDirection: "row",
     alignItems: "center",
