@@ -9,7 +9,7 @@ import { api, getApiErrorMessage } from "../api/endpoints";
 import { subscribePatientContext, subscribeWardBeds } from "../api/realtime";
 import { PatientCaseSelector } from "../components/PatientCaseSelector";
 import { VoiceTextInput } from "../components/VoiceTextInput";
-import { ActionButton, AnimatedBlock, CollapsibleCard, ProgressTimeline, ScreenShell, StatusPill, SurfaceCard } from "../components/ui";
+import { ActionButton, AnimatedBlock, ProgressTimeline, ScreenShell, StatusPill, SurfaceCard } from "../components/ui";
 import { useAppStore } from "../store/appStore";
 import { colors, radius } from "../theme";
 import { formatAiText } from "../utils/text";
@@ -257,6 +257,8 @@ type ConversationFolder = {
   latestAt: string;
   count: number;
 };
+
+type WorkspaceView = "result" | "queue" | "runs" | "history" | "system";
 
 const CHAT_PROGRESS_TEMPLATE: GenerateProgressStep[] = [
   { key: "input", label: "整理输入与附件", done: false, active: true },
@@ -1146,13 +1148,8 @@ export function RecommendationScreen() {
   const [lastAssistantSummary, setLastAssistantSummary] = useState("");
   const [lastCreatedDraftId, setLastCreatedDraftId] = useState("");
   const [lastCreatedOrderNo, setLastCreatedOrderNo] = useState("");
-  const [expandedPanels, setExpandedPanels] = useState({
-    runtime: false,
-    capability: false,
-    queue: false,
-    run: false,
-    history: false,
-  });
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("result");
+  const [selectorExpanded, setSelectorExpanded] = useState(true);
 
   const patientId = selectedPatient?.id;
   const patientDisplayName =
@@ -1305,21 +1302,40 @@ export function RecommendationScreen() {
     ];
   }, [abnormalObservations, executionProfile, patientContext, patientOrders, selectedPatient]);
 
-  const togglePanel = (key: keyof typeof expandedPanels) => {
-    setExpandedPanels((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  const latestAssistantMessage = useMemo(
+    () => [...messages].reverse().find((item) => item.role === "assistant") || null,
+    [messages]
+  );
+  const latestAssistantResponse = latestAssistantMessage?.response || null;
+  const hasResultWorkspace = Boolean(lastAssistantSummary || latestAssistantResponse || progress.length);
+  const workspaceTabs = useMemo(
+    () => [
+      { key: "result" as const, label: "当前结果", count: hasResultWorkspace ? 1 : 0 },
+      { key: "queue" as const, label: "持续任务", count: visibleQueueTasks.length },
+      { key: "runs" as const, label: "处理过程", count: runRecords.length },
+      { key: "history" as const, label: "历史记录", count: folders.length },
+      { key: "system" as const, label: "系统状态", count: runtimeStatus?.task_queue?.waiting_approval || 0 },
+    ],
+    [folders.length, hasResultWorkspace, runRecords.length, runtimeStatus?.task_queue?.waiting_approval, visibleQueueTasks.length]
+  );
 
   useEffect(() => {
     if (visibleQueueTasks.some((item) => item.status === "waiting_approval")) {
-      setExpandedPanels((prev) => (prev.queue ? prev : { ...prev, queue: true }));
+      setWorkspaceView("queue");
     }
   }, [visibleQueueTasks]);
 
   useEffect(() => {
     if (error) {
-      setExpandedPanels((prev) => (prev.history ? prev : { ...prev, history: true }));
+      setWorkspaceView("history");
     }
   }, [error]);
+
+  useEffect(() => {
+    if (!selectedPatient?.id) {
+      setSelectorExpanded(true);
+    }
+  }, [selectedPatient?.id]);
 
   const missionTemplateTitle = useMemo(() => {
     const patientLabel = patientContext?.bed_no ? `${patientContext.bed_no}床` : selectedPatient?.full_name || "当前病例";
@@ -1722,6 +1738,7 @@ export function RecommendationScreen() {
     setRunRecords([]);
     setSelectedRunId("");
     setSelectedRun(null);
+    setWorkspaceView("history");
   };
 
   const applyPromptPreset = (preset: string) => {
@@ -1746,6 +1763,7 @@ export function RecommendationScreen() {
   };
 
   const inspectRun = async (runId: string) => {
+    setWorkspaceView("runs");
     setSelectedRunId(runId);
     setRunLoading(true);
     try {
@@ -1987,6 +2005,8 @@ export function RecommendationScreen() {
       setLastResolvedPatientId(String(target.patientId || ""));
       setLastResolvedBedNo(String(target.bedNo || ""));
       setLastAssistantSummary(formatAiText(response.summary));
+      setWorkspaceView("result");
+      setSelectorExpanded(false);
       setProgress((prev) => prev.map((item) => ({ ...item, done: true, active: false })));
       if (target.patientId || patientId) {
         await loadHistory(conversationId, true);
@@ -2087,6 +2107,7 @@ export function RecommendationScreen() {
       setAttachments([]);
       setLastResolvedPatientId(String(target.patientId || ""));
       setLastResolvedBedNo(String(target.bedNo || ""));
+      setWorkspaceView("queue");
       await loadQueueTasks(true);
       await loadRuntimeStatus(true);
       await loadRunRecords(true);
@@ -2172,6 +2193,7 @@ export function RecommendationScreen() {
   };
 
   const openConversation = async (conversationId: string) => {
+    setWorkspaceView("history");
     setActiveConversationId(conversationId);
     if (patientId) {
       await loadHistory(conversationId);
@@ -2179,444 +2201,102 @@ export function RecommendationScreen() {
     }
   };
 
-  return (
-    <ScreenShell
-      title="智能方案推荐"
-      subtitle={selectedPatient ? `当前病例：${patientDisplayName}（${selectedPatient.id}）` : "可直接输入“23床...”跨病例问询"}
-      rightNode={<StatusPill text={loading ? "思考中" : MODE_LABEL[mode]} tone={loading ? "warning" : "info"} />}
-    >
-      <AnimatedBlock delay={30}>
-        <PatientCaseSelector
-          departmentId={departmentId}
-          selectedPatient={selectedPatient}
-          onSelectPatient={setSelectedPatient}
-          onCasesUpdated={setCaseBeds}
-        />
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={42}>
-        <SurfaceCard style={styles.situationCard}>
-          <View style={styles.sectionHeadRow}>
-            <View style={styles.runtimeTitleWrap}>
-              <Text style={styles.sectionTitle}>患者态势板</Text>
-              <Text style={styles.runtimeLead}>先把当前病例的风险、观察值和医嘱节奏摆在台面上，再让系统辅助你处理。</Text>
-            </View>
-            <StatusPill
-              text={contextLoading ? "同步中" : patientContext?.bed_no ? `${patientContext.bed_no}床` : "未选病例"}
-              tone={contextLoading ? "warning" : selectedPatient ? "success" : "info"}
-            />
-          </View>
-
-          {selectedPatient ? (
-            <>
-              <View style={styles.situationHero}>
-                <View style={styles.situationHeroText}>
-                  <Text style={styles.situationName}>{patientDisplayName}</Text>
-                  <Text style={styles.situationSubline}>
-                    {selectedPatient.current_status || "在院"} · {(patientContext?.diagnoses || []).slice(0, 2).join(" · ") || "等待同步诊断信息"}
-                  </Text>
-                </View>
-                <View style={styles.situationMetricRail}>
-                  <View style={styles.situationMetric}>
-                    <Text style={styles.situationMetricLabel}>风险标签</Text>
-                    <Text style={styles.situationMetricValue}>{patientContext?.risk_tags.length || 0}</Text>
-                  </View>
-                  <View style={styles.situationMetric}>
-                    <Text style={styles.situationMetricLabel}>待办任务</Text>
-                    <Text style={styles.situationMetricValue}>{patientContext?.pending_tasks.length || 0}</Text>
-                  </View>
-                  <View style={styles.situationMetric}>
-                    <Text style={styles.situationMetricLabel}>临近/超时医嘱</Text>
-                    <Text style={styles.situationMetricValue}>
-                      {(patientOrders?.stats?.due_30m || 0) + (patientOrders?.stats?.overdue || 0)}
-                    </Text>
-                  </View>
-                  <View style={styles.situationMetric}>
-                    <Text style={styles.situationMetricLabel}>高警示医嘱</Text>
-                    <Text style={styles.situationMetricValue}>{patientOrders?.stats?.high_alert || 0}</Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.situationBody}>
-                <View style={styles.situationColumn}>
-                  <Text style={styles.detailLabel}>异常观察</Text>
-                  {(abnormalObservations.length ? abnormalObservations : patientContext?.latest_observations || []).slice(0, 4).map((item, index) => (
-                    <View key={`${item.name}-${index}`} style={styles.signalRow}>
-                      <Text style={styles.signalName}>{item.name}</Text>
-                      <Text style={styles.signalValue}>{item.value}</Text>
-                    </View>
-                  ))}
-                  {!patientContext?.latest_observations?.length ? <Text style={styles.tip}>尚未同步到床旁观察值。</Text> : null}
-                </View>
-
-                <View style={styles.situationColumn}>
-                  <Text style={styles.detailLabel}>当前提示</Text>
-                  <View style={styles.actionChipWrap}>
-                    {(patientContext?.risk_tags || []).slice(0, 4).map((item, index) => (
-                      <View key={`${formatAiText(item)}-${index}`} style={styles.riskChip}>
-                        <Text style={styles.riskChipText}>{formatAiText(item)}</Text>
-                      </View>
-                    ))}
-                    {(patientContext?.pending_tasks || []).slice(0, 3).map((item, index) => (
-                      <View key={`${formatAiText(item)}-${index}`} style={styles.pendingChip}>
-                        <Text style={styles.pendingChipText}>{formatAiText(item)}</Text>
-                      </View>
-                    ))}
-                  </View>
-                  <Text style={styles.situationNote}>
-                    最新文书：{patientContext?.latest_document_sync || "暂无同步"} {patientContext?.latest_document_updated_at ? `· ${new Date(patientContext.latest_document_updated_at).toLocaleString()}` : ""}
-                  </Text>
-                </View>
-              </View>
-            </>
-          ) : (
-            <Text style={styles.tip}>先选中病例，或直接用“23床...”跨床提问，态势板会自动切换到对应床位。</Text>
-          )}
-        </SurfaceCard>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={56}>
-        <SurfaceCard style={styles.directiveCard}>
-          <View style={styles.sectionHeadRow}>
-            <View style={styles.runtimeTitleWrap}>
-              <Text style={styles.sectionTitle}>本次处理设定</Text>
-              <Text style={styles.runtimeLead}>这里决定系统这次更偏向快速梳理、沟通上报、整理记录，还是持续跟进。</Text>
-            </View>
-            <StatusPill text={profileMeta.label} tone={executionProfileTone(executionProfile)} />
-          </View>
-
-          <View style={styles.directiveGrid}>
-            {(Object.entries(EXECUTION_PROFILE_META) as Array<[AIExecutionProfile, (typeof EXECUTION_PROFILE_META)[AIExecutionProfile]]>).map(
-              ([key, item]) => {
-                const active = key === executionProfile;
-                return (
-                  <Pressable
-                    key={key}
-                    onPress={() => setExecutionProfile(key)}
-                    style={[styles.directiveOption, active && styles.directiveOptionActive]}
-                  >
-                    <Text style={[styles.directiveOptionTitle, active && styles.directiveOptionTitleActive]}>{item.label}</Text>
-                    <Text style={styles.directiveOptionText}>{formatAiText(item.summary)}</Text>
-                  </Pressable>
-                );
-              }
-            )}
-          </View>
-
-          <View style={styles.directiveSummaryBox}>
-            <Text style={styles.detailLabel}>当前执行姿态</Text>
-            <Text style={styles.directiveSummary}>{profileMeta.summary}</Text>
-            <Text style={styles.directiveMeta}>
-              后台队列将按 {formatWorkflowLabel(profileMeta.queueWorkflow)} 执行 · 对话模式使用 {formatAgentModeLabel(profileMeta.agentMode)}
+  const renderWorkspacePane = () => {
+    if (workspaceView === "result") {
+      if (!hasResultWorkspace) {
+        return (
+          <View style={styles.emptyWorkspace}>
+            <Text style={styles.emptyWorkspaceTitle}>结果会收在这里</Text>
+            <Text style={styles.emptyWorkspaceText}>
+              先在上方输入任务，系统返回后这里只保留当前最重要的结论、动作和处理细节，不再和历史、队列混在一起。
             </Text>
           </View>
+        );
+      }
 
-          <View style={styles.quickPromptWrap}>
-            {quickPrompts.map((item, index) => (
-              <Pressable key={`${formatAiText(item)}-${index}`} style={styles.quickPromptChip} onPress={() => applyPromptPreset(item)}>
-                <Text style={styles.quickPromptText}>{formatAiText(item)}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </SurfaceCard>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={52}>
-        <CollapsibleCard
-          title="系统状态"
-          subtitle="这里只放连接和运行状态，需要时再展开，不打断正常使用。"
-          style={styles.runtimeCard}
-          expanded={expandedPanels.runtime}
-          onToggle={() => togglePanel("runtime")}
-          badge={
-            <StatusPill
-              text={runtimeLoading ? "同步中" : formatEngineLabel(runtimeStatus?.active_engine)}
-              tone={runtimeStatus?.active_engine === "langgraph" ? "success" : "info"}
-            />
-          }
-        >
-          <View style={styles.runtimeGrid}>
-            <View style={styles.runtimeMetric}>
-              <Text style={styles.runtimeMetricLabel}>默认处理方式</Text>
-              <Text style={styles.runtimeMetricValue}>{formatEngineLabel(runtimeStatus?.configured_engine)}</Text>
-              <Text style={styles.runtimeMetricNote}>
-                当前实际使用：{formatEngineLabel(runtimeStatus?.active_engine)}
-                {runtimeStatus?.override_enabled ? " · 已手动切换" : " · 按系统默认"}
-              </Text>
-            </View>
-            <View style={styles.runtimeMetric}>
-              <Text style={styles.runtimeMetricLabel}>自动安排下一步</Text>
-              <Text style={styles.runtimeMetricValue}>{runtimeStatus?.planner_llm_enabled ? "已开启" : "先按标准流程"}</Text>
-              <Text style={styles.runtimeMetricNote}>
-                最多安排 {runtimeStatus?.planner_max_steps || 0} 步 · 响应慢时会自动回到稳妥方式
-              </Text>
-            </View>
-            <View style={styles.runtimeMetric}>
-              <Text style={styles.runtimeMetricLabel}>基础回答</Text>
-              <Text style={styles.runtimeMetricValue}>{runtimeStatus?.local_model_service_reachable ? "已连接" : "未连接"}</Text>
-              <Text style={styles.runtimeMetricNote}>{runtimeModelSummary}</Text>
-            </View>
-            <View style={styles.runtimeMetric}>
-              <Text style={styles.runtimeMetricLabel}>后台持续处理</Text>
-              <Text style={styles.runtimeMetricValue}>{runtimeStatus?.task_queue?.queued || 0}</Text>
-              <Text style={styles.runtimeMetricNote}>
-                运行中 {runtimeStatus?.task_queue?.running || 0} · 待审批 {runtimeStatus?.task_queue?.waiting_approval || 0}
-              </Text>
-            </View>
-          </View>
-
-          {runtimeFallbackText ? <Text style={styles.runtimeWarning}>{runtimeFallbackText}</Text> : null}
-
-          <View style={styles.runtimeAliasBox}>
-            <Text style={styles.detailLabel}>现在能帮你做什么</Text>
-            <Text style={styles.runtimeAliasText}>{runtimeCapabilitySummary}</Text>
-          </View>
-
-          {runtimeStatus?.approval_required_tools?.length ? (
-            <View style={styles.runtimeAliasBox}>
-              <Text style={styles.detailLabel}>需要人工确认的动作</Text>
-              <Text style={styles.runtimeAliasText}>{runtimeStatus.approval_required_tools.map(formatApprovalToolLabel).join(" · ")}</Text>
+      return (
+        <View style={styles.workspacePane}>
+          {lastAssistantSummary ? (
+            <View style={styles.resultHero}>
+              <View style={styles.resultHeroHead}>
+                <Text style={styles.resultHeroEyebrow}>当前结论</Text>
+                <View style={styles.responseBadgeRow}>
+                  {lastResolvedBedNo ? <StatusPill text={`${lastResolvedBedNo}床`} tone="success" /> : null}
+                  {latestAssistantResponse ? (
+                    <StatusPill
+                      text={`把握度 ${(latestAssistantResponse.confidence * 100).toFixed(0)}%`}
+                      tone={latestAssistantResponse.confidence >= 0.8 ? "success" : "warning"}
+                    />
+                  ) : null}
+                </View>
+              </View>
+              <Text style={styles.resultHeroText}>{lastAssistantSummary}</Text>
+              {(lastResolvedPatientId || lastResolvedBedNo) ? (
+                <Text style={styles.resultHeroMeta}>
+                  目标病例：{lastResolvedBedNo ? `${lastResolvedBedNo}床` : "-"} / {lastResolvedPatientId || "-"}
+                </Text>
+              ) : null}
             </View>
           ) : null}
 
-          <View style={styles.runtimeActionRow}>
-            <ActionButton
-              label={runtimeLoading ? "刷新中" : "刷新服务连接"}
-              onPress={() => loadRuntimeStatus()}
-              variant="secondary"
-              style={styles.runtimeAction}
-              disabled={runtimeLoading || Boolean(runtimeBusy)}
-            />
-            <ActionButton
-              label={runtimeBusy === "langgraph" ? "切换中" : "切到深度分析"}
-              onPress={() => switchRuntimeEngine("langgraph")}
-              variant="secondary"
-              style={styles.runtimeAction}
-              disabled={runtimeLoading || runtimeBusy === "langgraph"}
-            />
-            <ActionButton
-              label={runtimeBusy === "state_machine" ? "切换中" : "切回稳妥模式"}
-              onPress={() => switchRuntimeEngine("state_machine")}
-              variant="secondary"
-              style={styles.runtimeAction}
-              disabled={runtimeLoading || runtimeBusy === "state_machine"}
-            />
-            <ActionButton
-              label={runtimeBusy === "clear" ? "恢复中" : "恢复默认设置"}
-              onPress={clearRuntimeOverride}
-              variant="secondary"
-              style={styles.runtimeAction}
-              disabled={runtimeLoading || runtimeBusy === "clear" || !runtimeStatus?.override_enabled}
-            />
-          </View>
-        </CollapsibleCard>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={70}>
-        <CollapsibleCard
-          title="处理方式与系统能力"
-          subtitle="这里决定是直接回答，还是交给系统分步协同处理。"
-          expanded={expandedPanels.capability}
-          onToggle={() => togglePanel("capability")}
-          badge={<StatusPill text={MODE_LABEL[mode]} tone="info" />}
-        >
-          <View style={styles.modeRow}>
-            {(["single_model", "agent_cluster"] as AIChatMode[]).map((item) => {
-              const active = item === mode;
-              return (
-                <Pressable key={formatAiText(item)} style={[styles.modeBtn, active && styles.modeBtnActive]} onPress={() => setMode(item)}>
-                  <Text style={[styles.modeText, active && styles.modeTextActive]}>{MODE_LABEL[item]}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {mode === "single_model" ? (
-            <View style={styles.blockGap}>
-              <Text style={styles.subTitle}>快速回答能力</Text>
-              <View style={styles.chipWrap}>
-                {models.map((model) => {
-                  const active = model.id === selectedModel;
-                  const fallback = MODEL_FALLBACK[model.id];
-                  return (
-                    <Pressable
-                      key={model.id}
-                      onPress={() => setSelectedModel(model.id)}
-                      style={[styles.modelChip, active && styles.modelChipActive]}
-                    >
-                      <Text style={[styles.modelChipTitle, active && styles.modelChipTitleActive]}>
-                        {fallback?.name || model.name}
-                      </Text>
-                      <Text style={styles.modelChipDesc}>{fallback?.description || model.description}</Text>
-                    </Pressable>
-                  );
-                })}
+          {(lastAssistantSummary || lastCreatedDraftId || lastCreatedOrderNo) ? (
+            <View style={styles.resultActionBand}>
+              <View style={styles.inlineSectionHead}>
+                <View style={styles.runtimeTitleWrap}>
+                  <Text style={styles.sectionTitle}>落地动作</Text>
+                  <Text style={styles.runtimeLead}>把当前结果继续沉淀成文书、医嘱请求，或直接跳到对应中心处理。</Text>
+                </View>
               </View>
-            </View>
-          ) : (
-            <View style={styles.blockGap}>
-              <Text style={styles.subTitle}>系统这次怎么帮你</Text>
-              <View style={styles.clusterRow}>
-                {clusters.map((cluster) => {
-                  const active = cluster.id === selectedCluster;
-                  const clusterName = CLUSTER_FALLBACK[cluster.id] || cluster.name;
-                  return (
-                    <Pressable
-                      key={cluster.id}
-                      onPress={() => setSelectedCluster(cluster.id)}
-                      style={[styles.clusterBtn, active && styles.clusterBtnActive]}
-                    >
-                      <Text style={[styles.clusterName, active && styles.clusterNameActive]}>{clusterName}</Text>
-                    </Pressable>
-                  );
-                })}
+              <View style={styles.rowWrap}>
+                <ActionButton label="生成文书草稿" onPress={createDocumentFromLatest} variant="secondary" style={styles.flexHalf} />
+                <ActionButton label="生成医嘱请求" onPress={createOrderRequestFromLatest} style={styles.flexHalf} />
               </View>
-              <Text style={styles.mainModel}>当前基础回答：{activeCluster?.main_model || "基础整理（本地）"}</Text>
-              <Text style={styles.tip}>{activeCluster?.description || "系统会先整理重点，再排处理顺序；遇到复杂情况时再做一轮核对。"}</Text>
-              {activeClusterTasks.map((task) => {
-                const fallback = TASK_FALLBACK[task.model_id];
-                return (
-                  <View key={`${task.model_id}-${task.role}`} style={styles.taskRow}>
-                    <Text style={styles.taskModel}>{fallback?.modelName || task.model_name}</Text>
-                    <Text style={styles.taskText}>
-                      {fallback?.role || task.role} · {fallback?.task || task.task} · {task.enabled ? (["care-planner", "care-memory", "funasr-local", "cosyvoice-local", "care-critic"].includes(task.model_id) ? "系统自带，无需额外启动" : "已单独启动") : task.model_id === "qwen3-8b-local-planner" || task.model_id === "deepseek-r1-local" ? (primaryReady ? "暂未单独开启，先由基础整理代做" : "未启动") : task.model_id === "medgemma-local" ? (multimodalReady ? "查看附件时可直接使用" : "附件专用能力未开启，先不处理附件") : "未启动"}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          )}
-        </CollapsibleCard>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={100}>
-        <SurfaceCard>
-          <View style={styles.composerHeader}>
-            <View style={styles.runtimeTitleWrap}>
-              <Text style={styles.sectionTitle}>任务输入与交代</Text>
-              <Text style={styles.runtimeLead}>当前由 {profileMeta.label} 驱动，系统会据此决定是先观察、先上报还是先整理文书。</Text>
-            </View>
-            <StatusPill text={formatExecutionProfileLabel(executionProfile)} tone={executionProfileTone(executionProfile)} />
-          </View>
-
-          <View style={styles.missionCard}>
-            <View style={styles.sectionHeadRow}>
-              <View style={styles.runtimeTitleWrap}>
-                <Text style={styles.subTitle}>护理任务说明</Text>
-                <Text style={styles.runtimeLead}>把任务标题、完成标准和备注写清楚，系统会和本次对话一起保存，方便后续继续处理和回看。</Text>
+              <View style={styles.rowWrap}>
+                <ActionButton
+                  label="打开文书中心"
+                  onPress={() => navigation.navigate("Document")}
+                  variant="secondary"
+                  style={styles.flexHalf}
+                />
+                <ActionButton
+                  label="打开医嘱中心"
+                  onPress={() => navigation.navigate("Orders")}
+                  variant="secondary"
+                  style={styles.flexHalf}
+                />
               </View>
-              <StatusPill
-                text={normalizedSuccessCriteria.length ? `${normalizedSuccessCriteria.length} 项完成标准` : "未设标准"}
-                tone={normalizedSuccessCriteria.length ? "success" : "info"}
-              />
+              {lastCreatedDraftId ? <Text style={styles.resultActionMeta}>文书草稿 ID：{lastCreatedDraftId}</Text> : null}
+              {lastCreatedOrderNo ? <Text style={styles.resultActionMeta}>医嘱请求单号：{lastCreatedOrderNo}</Text> : null}
             </View>
+          ) : null}
 
-            <View style={styles.rowWrap}>
-              <ActionButton label="套用当前姿态" onPress={applyMissionTemplate} variant="secondary" style={styles.flexHalf} />
-              <ActionButton label="清空简报" onPress={clearMissionBrief} variant="secondary" style={styles.flexHalf} />
+          {progress.length > 0 ? (
+            <View style={styles.workspaceEmbedded}>
+              <ProgressTimeline title="系统处理进度" steps={progress} />
             </View>
+          ) : null}
 
-            <View style={styles.missionField}>
-              <Text style={styles.detailLabel}>任务标题</Text>
-              <TextInput
-                value={missionTitle}
-                onChangeText={setMissionTitle}
-                placeholder={missionTemplateTitle}
-                placeholderTextColor={colors.subText}
-                style={styles.missionInput}
-              />
+          {latestAssistantResponse ? (
+            <View style={styles.workspaceEmbedded}>
+              <ResponseDetails response={latestAssistantResponse} onInspectRun={inspectRun} />
             </View>
+          ) : null}
+        </View>
+      );
+    }
 
-            <View style={styles.missionField}>
-              <Text style={styles.detailLabel}>成功标准</Text>
-              <View style={styles.criteriaWrap}>
-                {missionCriteriaOptions.map((item) => {
-                  const active = normalizedSuccessCriteria.includes(item);
-                  return (
-                    <Pressable
-                      key={formatAiText(item)}
-                      onPress={() => toggleSuccessCriterion(item)}
-                      style={[styles.criteriaChip, active && styles.criteriaChipActive]}
-                    >
-                      <Text style={[styles.criteriaChipText, active && styles.criteriaChipTextActive]}>{formatAiText(item)}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            <View style={styles.missionField}>
-              <Text style={styles.detailLabel}>操作备注</Text>
-              <TextInput
-                value={missionNotes}
-                onChangeText={setMissionNotes}
-                placeholder="例如：先给我风险排序，再决定是否上报医生。"
-                placeholderTextColor={colors.subText}
-                multiline
-                textAlignVertical="top"
-                style={[styles.missionInput, styles.missionTextArea]}
-              />
-            </View>
-          </View>
-
-          <View style={styles.attachRow}>
-            <ActionButton label="添加图片" onPress={pickImage} variant="secondary" style={styles.attachBtn} />
-            <ActionButton label="添加文件" onPress={pickDocument} variant="secondary" style={styles.attachBtn} />
-            <ActionButton
-              label={`清空附件(${attachments.length})`}
-              onPress={() => setAttachments([])}
-              variant="secondary"
-              style={styles.attachBtn}
-            />
-          </View>
-          {attachments.length > 0 ? (
-            <View style={styles.fileList}>
-              {attachments.map((item, index) => (
-                <Text key={`${item.name}-${index}`} style={styles.fileItem}>
-                  • {item.name}
-                </Text>
-              ))}
-            </View>
-          ) : (
-            <Text style={styles.tip}>
-              支持语音、文字、附件联合输入。若输入“23床...”，系统会优先按床号定位病例；当前队列目标流程为
-              {formatWorkflowLabel(profileMeta.queueWorkflow)}。
-            </Text>
-          )}
-          <VoiceTextInput value={question} onChangeText={setQuestion} onSubmit={send} placeholder="请输入" />
-          <View style={styles.queueActionRow}>
-            <ActionButton
-              label={queueBusyId === "enqueue" ? "排队中" : "排入后台"}
-              onPress={enqueueCurrentTask}
-              variant="secondary"
-              style={styles.queueEnqueueAction}
-              disabled={loading || mode !== "agent_cluster" || !question.trim() || queueBusyId === "enqueue"}
-            />
-          </View>
-          {mode !== "agent_cluster" ? <Text style={styles.tip}>后台持续处理只在“系统协同”模式下启用。</Text> : null}
-        </SurfaceCard>
-      </AnimatedBlock>
-
-      <AnimatedBlock delay={112}>
-        <CollapsibleCard
-          title="持续跟进任务"
-          subtitle="需要系统持续处理、等待人工确认或回头查看的任务都收在这里。"
-          style={styles.queueCard}
-          expanded={expandedPanels.queue}
-          onToggle={() => togglePanel("queue")}
-          badge={
-            <StatusPill
-              text={queueLoading ? "同步中" : `${visibleQueueTasks.length} 条任务`}
-              tone={visibleQueueTasks.some((item) => item.status === "waiting_approval") ? "warning" : "info"}
-            />
-          }
-        >
+    if (workspaceView === "queue") {
+      return (
+        <View style={styles.workspacePane}>
           <View style={styles.queueSummaryRow}>
             <View style={styles.queueSummaryChip}>
               <Text style={styles.queueSummaryLabel}>值守状态</Text>
               <Text style={styles.queueSummaryValue}>
-                {runtimeStatus?.task_queue?.worker_running ? "运行中" : runtimeStatus?.task_queue?.worker_enabled ? "待机" : "关闭"}
+                {runtimeStatus?.task_queue?.worker_running
+                  ? "运行中"
+                  : runtimeStatus?.task_queue?.worker_enabled
+                  ? "待机"
+                  : "关闭"}
               </Text>
             </View>
             <View style={styles.queueSummaryChip}>
@@ -2648,7 +2328,7 @@ export function RecommendationScreen() {
               const active = queueStatusFilter === item;
               return (
                 <Pressable
-                  key={formatAiText(item)}
+                  key={item}
                   style={[styles.filterChip, active && styles.filterChipActive]}
                   onPress={() => setQueueStatusFilter(item)}
                 >
@@ -2664,7 +2344,7 @@ export function RecommendationScreen() {
               const label = item === "all" ? "全部姿态" : EXECUTION_PROFILE_META[item].label;
               return (
                 <Pressable
-                  key={formatAiText(item)}
+                  key={item}
                   style={[styles.filterChip, active && styles.filterChipActive]}
                   onPress={() => setQueueProfileFilter(item)}
                 >
@@ -2686,9 +2366,12 @@ export function RecommendationScreen() {
                   <View key={task.id} style={styles.queueItem}>
                     <View style={styles.queueHead}>
                       <View style={styles.queueHeadText}>
-                        <Text style={styles.queueTitle}>{task.payload.mission_title || task.summary || formatWorkflowLabel(task.workflow_type)}</Text>
+                        <Text style={styles.queueTitle}>
+                          {task.payload.mission_title || task.summary || formatWorkflowLabel(task.workflow_type)}
+                        </Text>
                         <Text style={styles.queueMeta}>
-                          {formatWorkflowLabel(task.workflow_type)} · {task.payload.bed_no ? `${task.payload.bed_no}床` : task.payload.patient_id || "未绑定病例"}
+                          {formatWorkflowLabel(task.workflow_type)} ·{" "}
+                          {task.payload.bed_no ? `${task.payload.bed_no}床` : task.payload.patient_id || "未绑定病例"}
                         </Text>
                       </View>
                       <StatusPill text={formatQueueStatus(task.status)} tone={queueStatusTone(task.status)} />
@@ -2713,7 +2396,8 @@ export function RecommendationScreen() {
                     ) : null}
 
                     <Text style={styles.queueMeta}>
-                      处理方式 {formatExecutionProfileLabel(task.payload.execution_profile)} · 执行方式 {formatAgentModeLabel(task.payload.agent_mode)}
+                      处理方式 {formatExecutionProfileLabel(task.payload.execution_profile)} · 执行方式{" "}
+                      {formatAgentModeLabel(task.payload.agent_mode)}
                     </Text>
                     {task.payload.operator_notes ? <Text style={styles.queueMeta}>操作备注：{task.payload.operator_notes}</Text> : null}
 
@@ -2723,14 +2407,14 @@ export function RecommendationScreen() {
 
                     {(task.runtime_engine || task.requested_engine || task.run_id) ? (
                       <Text style={styles.queueMeta}>
-                        处理方式 {formatEngineLabel(task.runtime_engine || task.requested_engine)} · 处理编号 {task.run_id || "-"}
+                        处理引擎 {formatEngineLabel(task.runtime_engine || task.requested_engine)} · 处理编号 {task.run_id || "-"}
                       </Text>
                     ) : null}
 
                     {task.run_id ? (
                       <View style={styles.rowWrap}>
                         <ActionButton
-                          label="查看运行"
+                          label="查看过程"
                           onPress={() => inspectRun(task.run_id!)}
                           variant="secondary"
                           style={styles.actionMini}
@@ -2789,23 +2473,13 @@ export function RecommendationScreen() {
               })}
             </View>
           )}
-        </CollapsibleCard>
-      </AnimatedBlock>
+        </View>
+      );
+    }
 
-      <AnimatedBlock delay={120}>
-        <CollapsibleCard
-          title="处理回看"
-          subtitle="需要复盘时再展开，平时默认收起，避免把主页面拉得过长。"
-          style={styles.runInspectorCard}
-          expanded={expandedPanels.run}
-          onToggle={() => togglePanel("run")}
-          badge={
-            <StatusPill
-              text={runLoading ? "同步中" : selectedRun ? formatQueueStatus(selectedRun.status) : `${runRecords.length} 条运行`}
-              tone={selectedRun ? queueStatusTone(selectedRun.status) : "info"}
-            />
-          }
-        >
+    if (workspaceView === "runs") {
+      return (
+        <View style={styles.workspacePane}>
           {runRecords.length > 0 ? (
             <ScrollView
               horizontal
@@ -2818,10 +2492,12 @@ export function RecommendationScreen() {
                 return (
                   <Pressable key={run.id} style={[styles.runChip, active && styles.runChipActive]} onPress={() => inspectRun(run.id)}>
                     <Text style={[styles.runChipTitle, active && styles.runChipTitleActive]} numberOfLines={1}>
-                      {run.request.mission_title || `${run.bed_no ? `${run.bed_no}床` : run.patient_id || "本次处理"} · ${formatWorkflowLabel(run.workflow_type)}`}
+                      {run.request.mission_title ||
+                        `${run.bed_no ? `${run.bed_no}床` : run.patient_id || "本次处理"} · ${formatWorkflowLabel(run.workflow_type)}`}
                     </Text>
                     <Text style={styles.runChipMeta} numberOfLines={1}>
-                      {run.bed_no ? `${run.bed_no}床 · ` : ""}{formatExecutionProfileLabel(run.request.execution_profile)} · {formatQueueStatus(run.status)}
+                      {run.bed_no ? `${run.bed_no}床 · ` : ""}
+                      {formatExecutionProfileLabel(run.request.execution_profile)} · {formatQueueStatus(run.status)}
                     </Text>
                   </Pressable>
                 );
@@ -2831,49 +2507,23 @@ export function RecommendationScreen() {
             <Text style={styles.tip}>当前没有可回看的处理记录。发起一次对话或后台任务后，这里会显示每次处理的详细过程。</Text>
           )}
 
-          {selectedRun ? <RunInspector run={selectedRun} onRetry={() => retryRun(selectedRun.id)} retrying={retryBusyId === selectedRun.id} /> : null}
-        </CollapsibleCard>
-      </AnimatedBlock>
-
-      {progress.length > 0 ? (
-        <AnimatedBlock delay={118}>
-          <ProgressTimeline title="系统处理进度" steps={progress} />
-        </AnimatedBlock>
-      ) : null}
-
-      {(lastAssistantSummary || lastCreatedDraftId || lastCreatedOrderNo) ? (
-        <AnimatedBlock delay={130}>
-          <SurfaceCard>
-            <Text style={styles.sectionTitle}>结果处理</Text>
-            {lastResolvedBedNo || lastResolvedPatientId ? (
-              <Text style={styles.tip}>目标病例：{lastResolvedBedNo ? `${lastResolvedBedNo}床` : "-"} / {lastResolvedPatientId || "-"}</Text>
-            ) : null}
-            <View style={styles.rowWrap}>
-              <ActionButton label="生成文书草稿" onPress={createDocumentFromLatest} variant="secondary" style={styles.flexHalf} />
-              <ActionButton label="生成医嘱请求" onPress={createOrderRequestFromLatest} style={styles.flexHalf} />
+          {selectedRun ? (
+            <View style={styles.workspaceEmbedded}>
+              <RunInspector run={selectedRun} onRetry={() => retryRun(selectedRun.id)} retrying={retryBusyId === selectedRun.id} />
             </View>
-            <View style={styles.rowWrap}>
-              <ActionButton label="打开文书中心" onPress={() => navigation.navigate("Document")} variant="secondary" style={styles.flexHalf} />
-              <ActionButton label="打开医嘱中心" onPress={() => navigation.navigate("Orders")} variant="secondary" style={styles.flexHalf} />
-            </View>
-            {lastCreatedDraftId ? <Text style={styles.tip}>文书草稿ID：{lastCreatedDraftId}</Text> : null}
-            {lastCreatedOrderNo ? <Text style={styles.tip}>医嘱请求单号：{lastCreatedOrderNo}</Text> : null}
-          </SurfaceCard>
-        </AnimatedBlock>
-      ) : null}
+          ) : null}
+        </View>
+      );
+    }
 
-      <AnimatedBlock delay={130}>
-        <CollapsibleCard
-          title="历史记录"
-          subtitle="这里只保留本页的历史回看，默认收起，避免和当前任务输入抢空间。"
-          expanded={expandedPanels.history}
-          onToggle={() => togglePanel("history")}
-          badge={<StatusPill text={folders.length ? `${folders.length} 个会话` : "暂无历史"} tone="info" />}
-        >
+    if (workspaceView === "history") {
+      return (
+        <View style={styles.workspacePane}>
           <View style={styles.headActions}>
             <ActionButton label="新建对话" onPress={createConversation} variant="secondary" style={styles.actionMini} />
             <ActionButton label="刷新历史" onPress={() => loadHistory(activeConversationId)} variant="secondary" style={styles.actionMini} />
           </View>
+
           {folders.length > 0 ? (
             <ScrollView
               horizontal
@@ -2902,29 +2552,980 @@ export function RecommendationScreen() {
           ) : (
             <Text style={styles.tip}>暂无会话，请先点击“新建对话”或直接提问。</Text>
           )}
+
           {historyLoading ? <Text style={styles.tip}>正在同步历史...</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {messages.length === 0 ? <Text style={styles.tip}>暂无消息，开始你的第一个问题。</Text> : null}
 
-          <ScrollView style={styles.chatList} nestedScrollEnabled>
-            {messages.map((msg) => (
-              <View key={msg.id} style={[styles.bubble, msg.role === "user" ? styles.userBubble : styles.assistantBubble]}>
-                <Text style={[styles.bubbleTag, msg.role === "user" ? styles.userTag : styles.assistantTag]}>
-                  {msg.role === "user" ? "我" : "AI"} · {MODE_LABEL[msg.mode]}
-                </Text>
-                <Text style={styles.bubbleText}>{formatAiText(msg.text)}</Text>
-                <Text style={styles.bubbleTime}>{new Date(msg.timestamp).toLocaleString()}</Text>
-                {msg.response ? <ResponseDetails response={msg.response} onInspectRun={inspectRun} /> : null}
+          <View style={styles.historyViewport}>
+            <ScrollView style={styles.chatList} nestedScrollEnabled>
+              {messages.map((msg) => (
+                <View key={msg.id} style={[styles.bubble, msg.role === "user" ? styles.userBubble : styles.assistantBubble]}>
+                  <Text style={[styles.bubbleTag, msg.role === "user" ? styles.userTag : styles.assistantTag]}>
+                    {msg.role === "user" ? "我" : "AI"} · {MODE_LABEL[msg.mode]}
+                  </Text>
+                  <Text style={styles.bubbleText}>{formatAiText(msg.text)}</Text>
+                  <Text style={styles.bubbleTime}>{new Date(msg.timestamp).toLocaleString()}</Text>
+                  {msg.response ? <ResponseDetails response={msg.response} onInspectRun={inspectRun} /> : null}
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.workspacePane}>
+        <View style={styles.systemStrip}>
+          {runtimeCapabilities.map((item) => (
+            <View key={item.label} style={styles.systemStripItem}>
+              <Text style={styles.systemStripLabel}>{item.label}</Text>
+              <Text style={styles.systemStripValue}>{item.status}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.runtimeGrid}>
+          <View style={styles.runtimeMetric}>
+            <Text style={styles.runtimeMetricLabel}>默认处理方式</Text>
+            <Text style={styles.runtimeMetricValue}>{formatEngineLabel(runtimeStatus?.configured_engine)}</Text>
+            <Text style={styles.runtimeMetricNote}>
+              当前实际使用：{formatEngineLabel(runtimeStatus?.active_engine)}
+              {runtimeStatus?.override_enabled ? " · 已手动切换" : " · 按系统默认"}
+            </Text>
+          </View>
+          <View style={styles.runtimeMetric}>
+            <Text style={styles.runtimeMetricLabel}>自动安排下一步</Text>
+            <Text style={styles.runtimeMetricValue}>{runtimeStatus?.planner_llm_enabled ? "已开启" : "先按标准流程"}</Text>
+            <Text style={styles.runtimeMetricNote}>
+              最多安排 {runtimeStatus?.planner_max_steps || 0} 步 · 响应慢时会自动回到稳妥方式
+            </Text>
+          </View>
+          <View style={styles.runtimeMetric}>
+            <Text style={styles.runtimeMetricLabel}>基础回答</Text>
+            <Text style={styles.runtimeMetricValue}>{runtimeStatus?.local_model_service_reachable ? "已连接" : "未连接"}</Text>
+            <Text style={styles.runtimeMetricNote}>{runtimeModelSummary}</Text>
+          </View>
+          <View style={styles.runtimeMetric}>
+            <Text style={styles.runtimeMetricLabel}>后台持续处理</Text>
+            <Text style={styles.runtimeMetricValue}>{runtimeStatus?.task_queue?.queued || 0}</Text>
+            <Text style={styles.runtimeMetricNote}>
+              运行中 {runtimeStatus?.task_queue?.running || 0} · 待审批 {runtimeStatus?.task_queue?.waiting_approval || 0}
+            </Text>
+          </View>
+        </View>
+
+        {runtimeFallbackText ? <Text style={styles.runtimeWarning}>{runtimeFallbackText}</Text> : null}
+
+        <View style={styles.systemNoteBlock}>
+          <Text style={styles.detailLabel}>现在能帮你做什么</Text>
+          <Text style={styles.runtimeAliasText}>{runtimeCapabilitySummary}</Text>
+        </View>
+
+        {runtimeStatus?.approval_required_tools?.length ? (
+          <View style={styles.systemNoteBlock}>
+            <Text style={styles.detailLabel}>需要人工确认的动作</Text>
+            <Text style={styles.runtimeAliasText}>
+              {runtimeStatus.approval_required_tools.map(formatApprovalToolLabel).join(" · ")}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.runtimeActionRow}>
+          <ActionButton
+            label={runtimeLoading ? "刷新中" : "刷新服务连接"}
+            onPress={() => loadRuntimeStatus()}
+            variant="secondary"
+            style={styles.runtimeAction}
+            disabled={runtimeLoading || Boolean(runtimeBusy)}
+          />
+          <ActionButton
+            label={runtimeBusy === "langgraph" ? "切换中" : "切到深度分析"}
+            onPress={() => switchRuntimeEngine("langgraph")}
+            variant="secondary"
+            style={styles.runtimeAction}
+            disabled={runtimeLoading || runtimeBusy === "langgraph"}
+          />
+          <ActionButton
+            label={runtimeBusy === "state_machine" ? "切换中" : "切回稳妥模式"}
+            onPress={() => switchRuntimeEngine("state_machine")}
+            variant="secondary"
+            style={styles.runtimeAction}
+            disabled={runtimeLoading || runtimeBusy === "state_machine"}
+          />
+          <ActionButton
+            label={runtimeBusy === "clear" ? "恢复中" : "恢复默认设置"}
+            onPress={clearRuntimeOverride}
+            variant="secondary"
+            style={styles.runtimeAction}
+            disabled={runtimeLoading || runtimeBusy === "clear" || !runtimeStatus?.override_enabled}
+          />
+        </View>
+
+        <View style={styles.systemCapabilityBlock}>
+          <View style={styles.inlineSectionHead}>
+            <View style={styles.runtimeTitleWrap}>
+              <Text style={styles.sectionTitle}>处理方式与系统能力</Text>
+              <Text style={styles.runtimeLead}>这里保留细颗粒度能力切换；主工作区只保留最常用的信息与动作。</Text>
+            </View>
+            <StatusPill text={MODE_LABEL[mode]} tone="info" />
+          </View>
+
+          <View style={styles.modeRow}>
+            {(["single_model", "agent_cluster"] as AIChatMode[]).map((item) => {
+              const active = item === mode;
+              return (
+                <Pressable key={item} style={[styles.modeBtn, active && styles.modeBtnActive]} onPress={() => setMode(item)}>
+                  <Text style={[styles.modeText, active && styles.modeTextActive]}>{MODE_LABEL[item]}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {mode === "single_model" ? (
+            <View style={styles.blockGap}>
+              <Text style={styles.subTitle}>快速回答能力</Text>
+              <View style={styles.chipWrap}>
+                {models.map((model) => {
+                  const active = model.id === selectedModel;
+                  const fallback = MODEL_FALLBACK[model.id];
+                  return (
+                    <Pressable
+                      key={model.id}
+                      onPress={() => setSelectedModel(model.id)}
+                      style={[styles.modelChip, active && styles.modelChipActive]}
+                    >
+                      <Text style={[styles.modelChipTitle, active && styles.modelChipTitleActive]}>
+                        {fallback?.name || model.name}
+                      </Text>
+                      <Text style={styles.modelChipDesc}>{fallback?.description || model.description}</Text>
+                    </Pressable>
+                  );
+                })}
               </View>
-            ))}
+            </View>
+          ) : (
+            <View style={styles.blockGap}>
+              <Text style={styles.subTitle}>系统这次怎么帮你</Text>
+              <View style={styles.clusterRow}>
+                {clusters.map((cluster) => {
+                  const active = cluster.id === selectedCluster;
+                  const clusterName = CLUSTER_FALLBACK[cluster.id] || cluster.name;
+                  return (
+                    <Pressable
+                      key={cluster.id}
+                      onPress={() => setSelectedCluster(cluster.id)}
+                      style={[styles.clusterBtn, active && styles.clusterBtnActive]}
+                    >
+                      <Text style={[styles.clusterName, active && styles.clusterNameActive]}>{clusterName}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={styles.mainModel}>当前基础回答：{activeCluster?.main_model || "基础整理（本地）"}</Text>
+              <Text style={styles.tip}>
+                {activeCluster?.description || "系统会先整理重点，再排处理顺序；遇到复杂情况时再做一轮核对。"}
+              </Text>
+              {activeClusterTasks.map((task) => {
+                const fallback = TASK_FALLBACK[task.model_id];
+                return (
+                  <View key={`${task.model_id}-${task.role}`} style={styles.taskRow}>
+                    <Text style={styles.taskModel}>{fallback?.modelName || task.model_name}</Text>
+                    <Text style={styles.taskText}>
+                      {fallback?.role || task.role} · {fallback?.task || task.task} ·{" "}
+                      {task.enabled
+                        ? ["care-planner", "care-memory", "funasr-local", "cosyvoice-local", "care-critic"].includes(task.model_id)
+                          ? "系统自带，无需额外启动"
+                          : "已单独启动"
+                        : task.model_id === "qwen3-8b-local-planner" || task.model_id === "deepseek-r1-local"
+                        ? primaryReady
+                          ? "暂未单独开启，先由基础整理代做"
+                          : "未启动"
+                        : task.model_id === "medgemma-local"
+                        ? multimodalReady
+                          ? "查看附件时可直接使用"
+                          : "附件专用能力未开启，先不处理附件"
+                        : "未启动"}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <ScreenShell
+      title="智能方案推荐"
+      subtitle={
+        selectedPatient
+          ? `当前病例：${patientDisplayName}（${selectedPatient.id}）`
+          : "先选病例或直接输入床号，系统会把任务输入、结果和回看集中在一个工作台里。"
+      }
+      rightNode={
+        <View style={styles.headerPillStack}>
+          <StatusPill text={loading ? "处理中" : MODE_LABEL[mode]} tone={loading ? "warning" : "info"} />
+          <StatusPill text={profileMeta.label} tone={executionProfileTone(executionProfile)} />
+        </View>
+      }
+    >
+      <AnimatedBlock delay={30}>
+        <SurfaceCard style={styles.commandDeck}>
+          <View style={styles.deckHero}>
+            <View style={styles.deckHeroCopy}>
+              <Text style={styles.deckEyebrow}>推荐工作台</Text>
+              <Text style={styles.deckTitle}>
+                {selectedPatient ? `${patientDisplayName} 的当前处理台` : "先锁定病例，再推进本次处理"}
+              </Text>
+              <Text style={styles.deckBody}>
+                {selectedPatient
+                  ? "把当前病例的风险、交代和 AI 结果压缩到同一条工作流里，减少在多个模块之间来回切换。"
+                  : "上方只保留本次处理真正会用到的输入和上下文，历史、持续任务与系统状态统一放到下方工作区。"}
+              </Text>
+            </View>
+            <View style={styles.deckStatGrid}>
+              <View style={styles.deckStat}>
+                <Text style={styles.deckStatLabel}>当前病例</Text>
+                <Text style={styles.deckStatValue}>
+                  {selectedPatient ? (patientContext?.bed_no ? `${patientContext.bed_no}床` : "已选中") : "未选择"}
+                </Text>
+              </View>
+              <View style={styles.deckStat}>
+                <Text style={styles.deckStatLabel}>风险标签</Text>
+                <Text style={styles.deckStatValue}>{patientContext?.risk_tags.length || 0}</Text>
+              </View>
+              <View style={styles.deckStat}>
+                <Text style={styles.deckStatLabel}>临近处置</Text>
+                <Text style={styles.deckStatValue}>
+                  {(patientOrders?.stats?.due_30m || 0) + (patientOrders?.stats?.overdue || 0)}
+                </Text>
+              </View>
+              <View style={styles.deckStat}>
+                <Text style={styles.deckStatLabel}>待审批</Text>
+                <Text style={styles.deckStatValue}>{runtimeStatus?.task_queue?.waiting_approval || 0}</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.deckDivider} />
+
+          <View style={styles.deckSection}>
+            <View style={styles.inlineSectionHead}>
+              <View style={styles.runtimeTitleWrap}>
+                <Text style={styles.sectionTitle}>病例与背景</Text>
+                <Text style={styles.inlineSectionNote}>先把病例锁定，再把床旁风险和当前线索摆平，避免输入区和信息区互相争空间。</Text>
+              </View>
+              <Pressable style={styles.selectorToggle} onPress={() => setSelectorExpanded((prev) => !prev)}>
+                <Text style={styles.inlineExpandText}>
+                  {selectorExpanded ? "收起病例列表" : selectedPatient ? "切换病例" : "展开病例列表"}
+                </Text>
+              </Pressable>
+            </View>
+            {selectedPatient ? (
+              <>
+                <View style={styles.situationHero}>
+                  <View style={styles.sectionHeadRow}>
+                    <View style={styles.situationHeroText}>
+                      <Text style={styles.situationName}>{patientDisplayName}</Text>
+                      <Text style={styles.situationSubline}>
+                        {selectedPatient.current_status || "在院"} · {(
+                          patientContext?.diagnoses || []
+                        ).slice(0, 2).join(" · ") || "等待同步诊断信息"}
+                      </Text>
+                    </View>
+                    <StatusPill
+                      text={contextLoading ? "同步中" : patientContext?.bed_no ? `${patientContext.bed_no}床` : "当前病例"}
+                      tone={contextLoading ? "warning" : "success"}
+                    />
+                  </View>
+
+                  <View style={styles.situationMetricRail}>
+                    <View style={styles.situationMetric}>
+                      <Text style={styles.situationMetricLabel}>异常观察</Text>
+                      <Text style={styles.situationMetricValue}>
+                        {(abnormalObservations.length ? abnormalObservations : patientContext?.latest_observations || []).length}
+                      </Text>
+                    </View>
+                    <View style={styles.situationMetric}>
+                      <Text style={styles.situationMetricLabel}>待办任务</Text>
+                      <Text style={styles.situationMetricValue}>{patientContext?.pending_tasks.length || 0}</Text>
+                    </View>
+                    <View style={styles.situationMetric}>
+                      <Text style={styles.situationMetricLabel}>高警示医嘱</Text>
+                      <Text style={styles.situationMetricValue}>{patientOrders?.stats?.high_alert || 0}</Text>
+                    </View>
+                    <View style={styles.situationMetric}>
+                      <Text style={styles.situationMetricLabel}>最新文书</Text>
+                      <Text style={styles.situationMetricValue}>{patientContext?.latest_document_sync ? "已同步" : "待同步"}</Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.situationBody}>
+                  <View style={styles.situationColumn}>
+                    <Text style={styles.detailLabel}>优先关注</Text>
+                    {(abnormalObservations.length ? abnormalObservations : patientContext?.latest_observations || [])
+                      .slice(0, 4)
+                      .map((item, index) => (
+                        <View key={`${item.name}-${index}`} style={styles.signalRow}>
+                          <Text style={styles.signalName}>{item.name}</Text>
+                          <Text style={styles.signalValue}>{item.value}</Text>
+                        </View>
+                      ))}
+                    {!patientContext?.latest_observations?.length ? <Text style={styles.tip}>尚未同步到床旁观察值。</Text> : null}
+                  </View>
+
+                  <View style={styles.situationColumn}>
+                    <Text style={styles.detailLabel}>当前提示</Text>
+                    <View style={styles.actionChipWrap}>
+                      {(patientContext?.risk_tags || []).slice(0, 4).map((item, index) => (
+                        <View key={`${formatAiText(item)}-${index}`} style={styles.riskChip}>
+                          <Text style={styles.riskChipText}>{formatAiText(item)}</Text>
+                        </View>
+                      ))}
+                      {(patientContext?.pending_tasks || []).slice(0, 3).map((item, index) => (
+                        <View key={`${formatAiText(item)}-${index}`} style={styles.pendingChip}>
+                          <Text style={styles.pendingChipText}>{formatAiText(item)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <Text style={styles.situationNote}>
+                      最新文书：{patientContext?.latest_document_sync || "暂无同步"}
+                      {patientContext?.latest_document_updated_at
+                        ? ` · ${new Date(patientContext.latest_document_updated_at).toLocaleString()}`
+                        : ""}
+                    </Text>
+                  </View>
+                </View>
+              </>
+            ) : (
+              <View style={styles.emptySelectionPanel}>
+                <Text style={styles.emptySelectionTitle}>还没有锁定病例</Text>
+                <Text style={styles.emptySelectionText}>
+                  你可以先展开病例列表选择患者，也可以直接输入“23床...”让系统按床号定位。
+                </Text>
+              </View>
+            )}
+
+            {selectorExpanded ? (
+              <View style={styles.selectorWrap}>
+                <PatientCaseSelector
+                  departmentId={departmentId}
+                  selectedPatient={selectedPatient}
+                  onSelectPatient={setSelectedPatient}
+                  onCasesUpdated={setCaseBeds}
+                  embedded
+                />
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.deckDivider} />
+
+          <View style={styles.deckSection}>
+            <View style={styles.inlineSectionHead}>
+              <View style={styles.runtimeTitleWrap}>
+                <Text style={styles.sectionTitle}>处理姿态</Text>
+                <Text style={styles.inlineSectionNote}>先决定这次是快速梳理、沟通上报、整理文书还是持续跟进，再决定由谁来回答。</Text>
+              </View>
+              <StatusPill text={formatExecutionProfileLabel(executionProfile)} tone={executionProfileTone(executionProfile)} />
+            </View>
+
+            <View style={styles.profileRail}>
+              {(Object.keys(EXECUTION_PROFILE_META) as AIExecutionProfile[]).map((item) => {
+                const active = executionProfile === item;
+                return (
+                  <Pressable
+                    key={item}
+                    style={[styles.profileChip, active && styles.profileChipActive]}
+                    onPress={() => setExecutionProfile(item)}
+                  >
+                    <Text style={[styles.profileChipLabel, active && styles.profileChipLabelActive]}>
+                      {EXECUTION_PROFILE_META[item].label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.directiveSummaryBox}>
+              <Text style={styles.directiveSummary}>{profileMeta.summary}</Text>
+              <Text style={styles.directiveMeta}>
+                后台队列按 {formatWorkflowLabel(profileMeta.queueWorkflow)} 推进 · 对话方式为 {formatAgentModeLabel(profileMeta.agentMode)}
+              </Text>
+            </View>
+
+            <View style={styles.modeRow}>
+              {(["single_model", "agent_cluster"] as AIChatMode[]).map((item) => {
+                const active = item === mode;
+                return (
+                  <Pressable key={item} style={[styles.modeBtn, active && styles.modeBtnActive]} onPress={() => setMode(item)}>
+                    <Text style={[styles.modeText, active && styles.modeTextActive]}>{MODE_LABEL[item]}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {mode === "single_model" ? (
+              <View style={styles.blockGap}>
+                <Text style={styles.subTitle}>当前回答模型</Text>
+                <View style={styles.chipWrap}>
+                  {models.map((model) => {
+                    const active = model.id === selectedModel;
+                    const fallback = MODEL_FALLBACK[model.id];
+                    return (
+                      <Pressable
+                        key={model.id}
+                        onPress={() => setSelectedModel(model.id)}
+                        style={[styles.modelChip, active && styles.modelChipActive]}
+                      >
+                        <Text style={[styles.modelChipTitle, active && styles.modelChipTitleActive]}>
+                          {fallback?.name || model.name}
+                        </Text>
+                        <Text style={styles.modelChipDesc}>{fallback?.description || model.description}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : (
+              <View style={styles.blockGap}>
+                <Text style={styles.subTitle}>当前协同分工</Text>
+                <View style={styles.clusterRow}>
+                  {clusters.map((cluster) => {
+                    const active = cluster.id === selectedCluster;
+                    const clusterName = CLUSTER_FALLBACK[cluster.id] || cluster.name;
+                    return (
+                      <Pressable
+                        key={cluster.id}
+                        onPress={() => setSelectedCluster(cluster.id)}
+                        style={[styles.clusterBtn, active && styles.clusterBtnActive]}
+                      >
+                        <Text style={[styles.clusterName, active && styles.clusterNameActive]}>{clusterName}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.mainModel}>当前基础回答：{activeCluster?.main_model || "基础整理（本地）"}</Text>
+                <Text style={styles.tip}>
+                  {activeCluster?.description || "系统会先整理重点，再排处理顺序；遇到复杂情况时再做一轮核对。"}
+                </Text>
+                {activeClusterTasks.length > 0 ? (
+                  <View style={styles.actionChipWrap}>
+                    {activeClusterTasks.slice(0, 4).map((task) => {
+                      const fallback = TASK_FALLBACK[task.model_id];
+                      return (
+                        <View key={`${task.model_id}-${task.role}`} style={styles.actionChip}>
+                          <Text style={styles.actionChipText}>{fallback?.role || task.role}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
+              </View>
+            )}
+
+            <View style={styles.quickPromptWrap}>
+              {quickPrompts.map((item, index) => (
+                <Pressable key={`${formatAiText(item)}-${index}`} style={styles.quickPromptChip} onPress={() => applyPromptPreset(item)}>
+                  <Text style={styles.quickPromptText}>{formatAiText(item)}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.deckDivider} />
+
+          <View style={styles.deckSection}>
+            <View style={styles.inlineSectionHead}>
+              <View style={styles.runtimeTitleWrap}>
+                <Text style={styles.sectionTitle}>任务输入与交代</Text>
+                <Text style={styles.inlineSectionNote}>把本次任务、完成标准和附件一次交代清楚，发送后当前结果会直接落在下方工作区。</Text>
+              </View>
+              <StatusPill
+                text={normalizedSuccessCriteria.length ? `${normalizedSuccessCriteria.length} 项标准` : "未设标准"}
+                tone={normalizedSuccessCriteria.length ? "success" : "info"}
+              />
+            </View>
+
+            <View style={styles.rowWrap}>
+              <ActionButton label="套用当前姿态" onPress={applyMissionTemplate} variant="secondary" style={styles.flexHalf} />
+              <ActionButton label="清空简报" onPress={clearMissionBrief} variant="secondary" style={styles.flexHalf} />
+            </View>
+
+            <View style={styles.missionCard}>
+              <View style={styles.missionField}>
+                <Text style={styles.detailLabel}>任务标题</Text>
+                <TextInput
+                  value={missionTitle}
+                  onChangeText={setMissionTitle}
+                  placeholder={missionTemplateTitle}
+                  placeholderTextColor={colors.subText}
+                  style={styles.missionInput}
+                />
+              </View>
+
+              <View style={styles.missionField}>
+                <Text style={styles.detailLabel}>成功标准</Text>
+                <View style={styles.criteriaWrap}>
+                  {missionCriteriaOptions.map((item) => {
+                    const active = normalizedSuccessCriteria.includes(item);
+                    return (
+                      <Pressable
+                        key={formatAiText(item)}
+                        onPress={() => toggleSuccessCriterion(item)}
+                        style={[styles.criteriaChip, active && styles.criteriaChipActive]}
+                      >
+                        <Text style={[styles.criteriaChipText, active && styles.criteriaChipTextActive]}>{formatAiText(item)}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.missionField}>
+                <Text style={styles.detailLabel}>操作备注</Text>
+                <TextInput
+                  value={missionNotes}
+                  onChangeText={setMissionNotes}
+                  placeholder="例如：先给我风险排序，再决定是否上报医生。"
+                  placeholderTextColor={colors.subText}
+                  multiline
+                  textAlignVertical="top"
+                  style={[styles.missionInput, styles.missionTextArea]}
+                />
+              </View>
+            </View>
+
+            <View style={styles.attachRow}>
+              <ActionButton label="添加图片" onPress={pickImage} variant="secondary" style={styles.attachBtn} />
+              <ActionButton label="添加文件" onPress={pickDocument} variant="secondary" style={styles.attachBtn} />
+              <ActionButton
+                label={`清空附件(${attachments.length})`}
+                onPress={() => setAttachments([])}
+                variant="secondary"
+                style={styles.attachBtn}
+              />
+            </View>
+
+            {attachments.length > 0 ? (
+              <View style={styles.fileList}>
+                {attachments.map((item, index) => (
+                  <Text key={`${item.name}-${index}`} style={styles.fileItem}>
+                    • {item.name}
+                  </Text>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.tip}>
+                支持语音、文字、附件联合输入。若输入“23床...”，系统会优先按床号定位病例；后台流程将按
+                {formatWorkflowLabel(profileMeta.queueWorkflow)}推进。
+              </Text>
+            )}
+
+            <View style={styles.workspaceEmbedded}>
+              <VoiceTextInput value={question} onChangeText={setQuestion} onSubmit={send} placeholder="请输入" embedded />
+            </View>
+
+            <View style={styles.queueActionRow}>
+              <ActionButton
+                label={queueBusyId === "enqueue" ? "排队中" : "排入后台持续跟进"}
+                onPress={enqueueCurrentTask}
+                variant="secondary"
+                style={styles.queueEnqueueAction}
+                disabled={loading || mode !== "agent_cluster" || !question.trim() || queueBusyId === "enqueue"}
+              />
+            </View>
+            <Text style={styles.tip}>发送用于立即给出结果；排入后台适合持续跟进、等待人工确认或稍后回看。</Text>
+            {mode !== "agent_cluster" ? <Text style={styles.tip}>后台持续处理只在“系统协同”模式下启用。</Text> : null}
+          </View>
+        </SurfaceCard>
+      </AnimatedBlock>
+
+      <AnimatedBlock delay={74}>
+        <SurfaceCard style={styles.workspaceShell}>
+          <View style={styles.workspaceHeader}>
+            <View style={styles.runtimeTitleWrap}>
+              <Text style={styles.sectionTitle}>处理工作区</Text>
+              <Text style={styles.runtimeLead}>当前结果、持续任务、处理过程、历史回看和系统状态都收在这里，不再铺满整页。</Text>
+            </View>
+            <StatusPill
+              text={
+                runtimeStatus?.task_queue?.waiting_approval
+                  ? `${runtimeStatus.task_queue.waiting_approval} 项待审批`
+                  : workspaceTabs.find((item) => item.key === workspaceView)?.label || "工作区"
+              }
+              tone={runtimeStatus?.task_queue?.waiting_approval ? "warning" : "info"}
+            />
+          </View>
+
+          {error && workspaceView !== "history" ? (
+            <View style={styles.workspaceInfoBanner}>
+              <Text style={styles.workspaceInfoText}>{error}</Text>
+            </View>
+          ) : null}
+
+          <ScrollView
+            horizontal
+            style={styles.workspaceTabs}
+            contentContainerStyle={styles.folderListContent}
+            showsHorizontalScrollIndicator={false}
+          >
+            {workspaceTabs.map((item) => {
+              const active = workspaceView === item.key;
+              return (
+                <Pressable
+                  key={item.key}
+                  style={[styles.workspaceTab, active && styles.workspaceTabActive]}
+                  onPress={() => setWorkspaceView(item.key)}
+                >
+                  <Text style={[styles.workspaceTabLabel, active && styles.workspaceTabLabelActive]}>{item.label}</Text>
+                  {item.count > 0 ? (
+                    <View style={[styles.workspaceTabCount, active && styles.workspaceTabCountActive]}>
+                      <Text style={[styles.workspaceTabCountText, active && styles.workspaceTabCountTextActive]}>{item.count}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+              );
+            })}
           </ScrollView>
-        </CollapsibleCard>
+
+          <View style={styles.workspaceViewport}>{renderWorkspacePane()}</View>
+        </SurfaceCard>
       </AnimatedBlock>
     </ScreenShell>
   );
 }
-
 const styles = StyleSheet.create({
+  headerPillStack: {
+    gap: 6,
+    alignItems: "flex-end",
+  },
+  commandDeck: {
+    backgroundColor: "#fbfdff",
+    borderColor: "#d6e0ea",
+    gap: 18,
+  },
+  deckHero: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#d8e4f0",
+    backgroundColor: "#edf4fb",
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    gap: 16,
+  },
+  deckHeroCopy: {
+    gap: 6,
+  },
+  deckEyebrow: {
+    color: colors.secondary,
+    fontSize: 11.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  deckTitle: {
+    color: colors.primary,
+    fontSize: 27,
+    lineHeight: 33,
+    fontWeight: "800",
+  },
+  deckBody: {
+    color: colors.subText,
+    fontSize: 13.5,
+    lineHeight: 20,
+  },
+  deckStatGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  deckStat: {
+    flex: 1,
+    minWidth: "23%",
+    borderRadius: 14,
+    backgroundColor: "#ffffff",
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    gap: 4,
+  },
+  deckStatLabel: {
+    color: colors.subText,
+    fontSize: 11.5,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  deckStatValue: {
+    color: colors.primary,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  deckDivider: {
+    height: 1,
+    backgroundColor: "#e2eaf2",
+  },
+  deckSection: {
+    gap: 12,
+  },
+  inlineSectionHead: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  inlineSectionNote: {
+    color: colors.subText,
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  selectorToggle: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d8e3ef",
+    backgroundColor: "#ffffff",
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  selectorWrap: {
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#e3ebf3",
+    paddingTop: 12,
+  },
+  emptySelectionPanel: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dbe6f0",
+    backgroundColor: "#f8fbfe",
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 6,
+  },
+  emptySelectionTitle: {
+    color: colors.primary,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  emptySelectionText: {
+    color: colors.subText,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  profileRail: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  profileChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d8e1ec",
+    backgroundColor: "#ffffff",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  profileChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: "#eaf1ff",
+  },
+  profileChipLabel: {
+    color: colors.subText,
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  profileChipLabelActive: {
+    color: colors.primary,
+  },
+  workspaceShell: {
+    backgroundColor: "#f8fbfd",
+    borderColor: "#d8e1e9",
+    gap: 12,
+  },
+  workspaceHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  workspaceTabs: {
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  workspaceTab: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#ffffff",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  workspaceTabActive: {
+    borderColor: colors.primary,
+    backgroundColor: "#edf3ff",
+  },
+  workspaceTabLabel: {
+    color: colors.subText,
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  workspaceTabLabelActive: {
+    color: colors.primary,
+  },
+  workspaceTabCount: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 999,
+    backgroundColor: "#eef2f7",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  workspaceTabCountActive: {
+    backgroundColor: "#dbe7ff",
+  },
+  workspaceTabCountText: {
+    color: colors.subText,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  workspaceTabCountTextActive: {
+    color: colors.primary,
+  },
+  workspaceViewport: {
+    marginTop: 2,
+  },
+  workspaceInfoBanner: {
+    borderRadius: 12,
+    backgroundColor: "#fff5e8",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  workspaceInfoText: {
+    color: colors.warning,
+    fontSize: 12.5,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  workspacePane: {
+    gap: 12,
+  },
+  workspaceEmbedded: {
+    gap: 8,
+  },
+  emptyWorkspace: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dce6ef",
+    backgroundColor: "#f7fafc",
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  emptyWorkspaceTitle: {
+    color: colors.primary,
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  emptyWorkspaceText: {
+    color: colors.subText,
+    fontSize: 13.5,
+    lineHeight: 20,
+  },
+  resultHero: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#d6e5f4",
+    backgroundColor: "#edf5ff",
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  resultHeroHead: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  resultHeroEyebrow: {
+    color: colors.secondary,
+    fontSize: 11.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  resultHeroText: {
+    color: colors.primary,
+    fontSize: 18,
+    lineHeight: 26,
+    fontWeight: "800",
+  },
+  resultHeroMeta: {
+    color: colors.subText,
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  resultActionBand: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dbe5ef",
+    backgroundColor: "#ffffff",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  resultActionMeta: {
+    color: colors.primary,
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  historyViewport: {
+    maxHeight: 560,
+    borderRadius: 16,
+    backgroundColor: "#f7fafc",
+    padding: 8,
+  },
+  systemStrip: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  systemStripItem: {
+    flex: 1,
+    minWidth: "30%",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#dbe4ed",
+    backgroundColor: "#ffffff",
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    gap: 4,
+  },
+  systemStripLabel: {
+    color: colors.subText,
+    fontSize: 11.5,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  systemStripValue: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  systemNoteBlock: {
+    borderRadius: 12,
+    backgroundColor: "#eef5ff",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 4,
+  },
   sectionTitle: {
     color: colors.text,
     fontWeight: "700",
@@ -3960,3 +4561,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
+

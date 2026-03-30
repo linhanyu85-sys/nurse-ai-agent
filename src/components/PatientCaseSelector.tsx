@@ -11,9 +11,16 @@ type Props = {
   selectedPatient: Patient | null;
   onSelectPatient: (patient: Patient) => void;
   onCasesUpdated?: (cases: BedOverview[]) => void;
+  embedded?: boolean;
 };
 
-export function PatientCaseSelector({ departmentId, selectedPatient, onSelectPatient, onCasesUpdated }: Props) {
+export function PatientCaseSelector({
+  departmentId,
+  selectedPatient,
+  onSelectPatient,
+  onCasesUpdated,
+  embedded = false,
+}: Props) {
   const [beds, setBeds] = useState<BedOverview[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -90,8 +97,8 @@ export function PatientCaseSelector({ departmentId, selectedPatient, onSelectPat
     }
   };
 
-  return (
-    <SurfaceCard>
+  const content = (
+    <>
       <View style={styles.header}>
         <Text style={styles.title}>病例列表（先选病例，再进入 AI Agent）</Text>
         <ActionButton label="刷新病例" onPress={loadCases} variant="secondary" />
@@ -169,22 +176,35 @@ export function PatientCaseSelector({ departmentId, selectedPatient, onSelectPat
           </Pressable>
         );
       })}
+    </>
+  );
+
+  if (embedded) {
+    return <View style={styles.embeddedShell}>{content}</View>;
+  }
+
+  return (
+    <SurfaceCard>
+      {content}
     </SurfaceCard>
   );
 }
 
 const styles = StyleSheet.create({
+  embeddedShell: {
+    gap: 10,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 10,
   },
   title: {
     color: colors.text,
     fontWeight: "700",
     fontSize: 15,
     flex: 1,
-    marginRight: 10,
   },
   selectedWrap: {
     gap: 4,

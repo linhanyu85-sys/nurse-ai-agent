@@ -12,6 +12,7 @@ type Props = {
   onChangeText: (text: string) => void;
   onSubmit: () => void;
   placeholder?: string;
+  embedded?: boolean;
 };
 
 function isInvalidTranscription(text: string, provider: string): boolean {
@@ -51,7 +52,7 @@ const uriToBase64 = async (uri: string) => {
   }
 };
 
-export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder }: Props) {
+export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder, embedded = false }: Props) {
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [busy, setBusy] = useState(false);
   const [recordingOn, setRecordingOn] = useState(false);
@@ -147,8 +148,8 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder }: P
     }
   };
 
-  return (
-    <SurfaceCard style={styles.box}>
+  const content = (
+    <>
       <TextInput
         style={styles.input}
         multiline
@@ -175,11 +176,24 @@ export function VoiceTextInput({ value, onChangeText, onSubmit, placeholder }: P
       ) : null}
       {recordingOn ? <StatusPill text={`录音中 ${recordSeconds}s`} tone="warning" /> : null}
       {voiceStatus ? <Text style={styles.busyText}>{voiceStatus}</Text> : null}
+    </>
+  );
+
+  if (embedded) {
+    return <View style={styles.embeddedShell}>{content}</View>;
+  }
+
+  return (
+    <SurfaceCard style={styles.box}>
+      {content}
     </SurfaceCard>
   );
 }
 
 const styles = StyleSheet.create({
+  embeddedShell: {
+    gap: spacing.sm,
+  },
   box: {
     gap: spacing.sm,
   },
