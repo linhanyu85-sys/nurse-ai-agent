@@ -1,9 +1,60 @@
+﻿# Secrets and local env files
 .env
 .env.local
 .env.*
+**/.env
+**/.env.local
+**/.env.*
 !.env.example
-.expo/
-.expo*.log
-.expo_*.log
+!.env.server.example
+!env.local.example
+!**/.env.example
+!**/.env.local.example
+!**/.env.server.example
+
+# Node / Expo
 node_modules/
+**/node_modules/
+.expo/
+**/.expo/
+.expo*.log
+**/.expo*.log
+.expo_*.log
+**/.expo_*.log
+.expo-deploy-check/
+**/.expo-deploy-check/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+**/.venv/
+venv/
+**/venv/
+
+# Build outputs
 build/
+**/build/
+dist/
+**/dist/
+*.apk
+*.aab
+
+# Local runtime data
+logs/
+data/
+.pytest_cache/
+.smoke-regression/
+ai model/
+services/*/data/
+services/**/data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Local helper binaries / backups
+*.bak_*
+*.out.log
+*.err.log
