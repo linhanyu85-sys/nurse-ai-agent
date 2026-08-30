@@ -23,7 +23,7 @@ jobs:
           artifact="AI临床助手_v0.1.21.apk"
           : > "$artifact"
           for part in release-parts/*.b64; do
-            base64 --decode "$part" >> "$artifact"
+            cat "$part" >> "$artifact"
           done
           actual_size="$(wc -c < "$artifact" | tr -d ' ')"
           test "$actual_size" = "75978193"
