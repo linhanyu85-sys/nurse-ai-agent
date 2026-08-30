@@ -1,0 +1,47 @@
+name: Publish AI Clinical Assistant APK
+
+on:
+  push:
+    branches:
+      - apk-download-v0.1.21
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release payload
+        uses: actions/checkout@v4
+
+      - name: Reassemble APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="AI临床助手_v0.1.21.apk"
+          : > "$artifact"
+          for part in release-parts/*.b64; do
+            base64 --decode "$part" >> "$artifact"
+          done
+          actual_size="$(wc -c < "$artifact" | tr -d ' ')"
+          test "$actual_size" = "75978193"
+          printf '%s  %s\n' "631cbddefb2c58bc953c653ef051fe89b0f9a60bf988285c04b24c389c135c5e" "$artifact" | sha256sum --check -
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="ai-clinical-assistant-v0.1.21"
+          artifact="AI临床助手_v0.1.21.apk"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$artifact" --clobber
+          else
+            gh release create "$tag" "$artifact" \
+              --target "$GITHUB_SHA" \
+              --title "AI临床助手 v0.1.21" \
+              --notes "PDA 界面修复版：修复病区概览和脑机患者需求卡片在窄屏设备上的布局溢出。"
+          fi
